@@ -18,6 +18,7 @@ export const MODERN_VERSION = "2026-07-28";
 export const LEGACY_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 export const SUPPORTED_VERSIONS = [MODERN_VERSION, ...LEGACY_VERSIONS];
 const META_VERSION = "io.modelcontextprotocol/protocolVersion";
+const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
 
 export const ERR = {
   PARSE: -32700,
@@ -87,6 +88,7 @@ export function decodeHeaderValue(value: string): string {
 
 export function createMcpHandler(opts: McpServerOptions) {
   const serverInfo = { name: opts.name, version: opts.version };
+  const serverMeta = { [META_SERVER_INFO]: serverInfo };
   const capabilities = { tools: { listChanged: false } };
 
   function listTools() {
@@ -212,10 +214,25 @@ export function createMcpHandler(opts: McpServerOptions) {
       }
     }
 
+    const notFound = () =>
+      rpcError(
+        isModern ? 404 : 200,
+        id,
+        ERR.METHOD_NOT_FOUND,
+        `Method not found: ${method}`,
+      );
+    // The 2026-07-28 revision removed the handshake and ping
+    if (isModern && (method === "initialize" || method === "ping")) {
+      return notFound();
+    }
+    // Modern servers SHOULD identify themselves in every result
+    const result = (body: object) =>
+      rpcResult(id, isModern ? { ...body, _meta: serverMeta } : body);
+
     switch (method) {
       case "initialize": {
         const requested = params.protocolVersion;
-        return rpcResult(id, {
+        return result({
           protocolVersion: LEGACY_VERSIONS.includes(requested)
             ? requested
             : LEGACY_VERSIONS[0],
@@ -224,19 +241,19 @@ export function createMcpHandler(opts: McpServerOptions) {
           instructions: opts.instructions,
         });
       }
+      case "ping":
+        return result({});
       case "server/discover":
         return rpcResult(id, {
           supportedVersions: SUPPORTED_VERSIONS,
           capabilities,
-          _meta: { "io.modelcontextprotocol/serverInfo": serverInfo },
+          _meta: serverMeta,
           instructions: opts.instructions,
           ttlMs: 3_600_000,
           cacheScope: "private",
         });
-      case "ping":
-        return rpcResult(id, {});
       case "tools/list":
-        return rpcResult(id, {
+        return result({
           tools: listTools(),
           ttlMs: 3_600_000,
           cacheScope: "private",
@@ -253,23 +270,18 @@ export function createMcpHandler(opts: McpServerOptions) {
         }
         const outcome = await opts.callTool(tool, params.arguments);
         if (!outcome.ok) {
-          return rpcResult(id, {
+          return result({
             content: [{ type: "text", text: outcome.message }],
             isError: true,
           });
         }
-        return rpcResult(id, {
+        return result({
           content: [{ type: "text", text: JSON.stringify(outcome.value) }],
           structuredContent: outcome.value,
         });
       }
       default:
-        return rpcError(
-          isModern ? 404 : 200,
-          id,
-          ERR.METHOD_NOT_FOUND,
-          `Method not found: ${method}`,
-        );
+        return notFound();
     }
   };
 }

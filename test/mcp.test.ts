@@ -132,6 +132,12 @@ describe("MCP legacy era", function () {
     assert.equal(r.json.result.content[0].text, '{"text":"hi"}');
   });
 
+  it("answers ping and leaves results without _meta", async function () {
+    const r = await call(post({ jsonrpc: "2.0", id: 4, method: "ping" }));
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json.result, { resultType: "complete" });
+  });
+
   it("rejects an unknown version header", async function () {
     const r = await call(
       post(
@@ -165,6 +171,30 @@ describe("MCP modern era (2026-07-28)", function () {
     );
     assert.equal(r.status, 200);
     assert.deepEqual(r.json.result.structuredContent, { text: "yo" });
+  });
+
+  it("identifies the server in every result's _meta", async function () {
+    for (const req of [
+      modern("tools/list"),
+      modern("tools/call", { name: "echo", arguments: {} }),
+      modern("tools/call", { name: "echo", arguments: { text: "fail" } }),
+    ]) {
+      const r = await call(req);
+      assert.deepEqual(r.json.result._meta, {
+        "io.modelcontextprotocol/serverInfo": {
+          name: "Zotero S2",
+          version: "test",
+        },
+      });
+    }
+  });
+
+  it("treats initialize and ping as removed methods", async function () {
+    for (const method of ["initialize", "ping"]) {
+      const r = await call(modern(method));
+      assert.equal(r.status, 404, method);
+      assert.equal(r.json.error.code, ERR.METHOD_NOT_FOUND);
+    }
   });
 
   it("decodes a base64 Mcp-Name", async function () {
