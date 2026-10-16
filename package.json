@@ -1,8 +1,17 @@
 {
   "name": "zotero-s2",
+  "private": true,
   "type": "module",
   "version": "0.1.0",
   "description": "Semantic Scholar for Zotero 10, served to AI agents over MCP",
+  "keywords": [
+    "zotero",
+    "zotero-plugin",
+    "semantic-scholar",
+    "mcp",
+    "model-context-protocol",
+    "ai-agents"
+  ],
   "config": {
     "addonName": "Zotero S2",
     "addonID": "zotero-s2@dingzhengyuan.dev",
