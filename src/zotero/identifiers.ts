@@ -19,6 +19,13 @@ const DOI_RE = /\b(10\.\d{4,9}\/\S+)/;
 const ARXIV_NEW_RE = /^(\d{4}\.\d{4,5})(v\d+)?$/;
 const ARXIV_OLD_RE = /^([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(v\d+)?$/i;
 const S2_SHA_RE = /^[0-9a-f]{40}$/i;
+const S2_PREFIXES: Record<string, string> = {
+  pmid: "PMID",
+  pmcid: "PMCID",
+  mag: "MAG",
+  acl: "ACL",
+  url: "URL",
+};
 
 export function normalizeDOI(doi: string): string {
   return doi
@@ -40,7 +47,7 @@ export function normalizeTitle(title: string): string {
   return title
     .toLowerCase()
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
@@ -62,9 +69,11 @@ export function parseIdentifier(raw: string): ParsedId {
       }
       case "corpusid":
         return { corpusId: rest.trim(), s2Query: `CorpusId:${rest.trim()}` };
-      default:
-        // PMID:, PMCID:, ACL:, MAG:, URL: — only S2 can resolve these
-        return { s2Query: input };
+      default: {
+        // Only S2 can resolve these; send its documented prefix spelling
+        const s2Prefix = S2_PREFIXES[prefix.toLowerCase()];
+        return { s2Query: s2Prefix ? `${s2Prefix}:${rest.trim()}` : input };
+      }
     }
   }
   const arxivURL =

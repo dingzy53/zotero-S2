@@ -1,5 +1,10 @@
-import { S2Client } from "../s2/client";
-import { FULL_FIELDS, SEARCH_FIELDS, compactPaper } from "../s2/fields";
+import { S2Client, S2Error } from "../s2/client";
+import {
+  FULL_FIELDS,
+  SEARCH_FIELDS,
+  compactPaper,
+  compactSnippet,
+} from "../s2/fields";
 import { CallStats, S2Paper } from "../s2/types";
 import {
   describeCollection,
@@ -73,6 +78,11 @@ const s2Filters: Record<string, JSONSchema> = {
     type: "string",
     description: 'Year or range, e.g. "2019", "2016-2020", "2010-".',
   },
+  publicationDateOrYear: {
+    type: "string",
+    description:
+      'Date range "start:end", either end optional, e.g. "2019-03-05:2020-06", "2021:".',
+  },
   fieldsOfStudy: {
     type: "string",
     description: 'Comma list, e.g. "Computer Science,Medicine".',
@@ -92,6 +102,7 @@ const s2Filters: Record<string, JSONSchema> = {
 function s2FilterQuery(args: Record<string, any>) {
   return {
     year: args.year,
+    publicationDateOrYear: args.publicationDateOrYear,
     fieldsOfStudy: args.fieldsOfStudy,
     publicationTypes: args.publicationTypes,
     venue: args.venue,
@@ -146,13 +157,7 @@ async function lookupItems(
     for (let i = 0; i < items.length; i++) {
       if (papers[i]) continue;
       const title = items[i].getField("title") as string;
-      if (!title) continue;
-      try {
-        const res = await ctx.s2.matchTitle(ctx.stats, title, fields);
-        papers[i] = res?.data?.[0] ?? null;
-      } catch {
-        // No title match: leave null
-      }
+      if (title) papers[i] = await ctx.s2.matchTitle(ctx.stats, title, fields);
     }
   }
   return papers;
@@ -253,12 +258,11 @@ export const TOOLS: ToolDef[] = [
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
     async handler(args, ctx) {
-      const res = await ctx.s2.matchTitle(
+      const best = await ctx.s2.matchTitle(
         ctx.stats,
         args.title,
         args.fields || FULL_FIELDS,
       );
-      const best = res?.data?.[0];
       if (!best) throw new ToolError("No title match");
       return args.fields
         ? best
@@ -462,38 +466,42 @@ export const TOOLS: ToolDef[] = [
     name: "s2_snippet_search",
     title: "Full-text snippet search",
     description:
-      "Search text snippets inside paper bodies/abstracts. Good for finding papers that state a specific claim or method.",
+      "Search ~500-word text snippets from paper titles, abstracts and bodies. Good for finding papers that state a specific claim or method. Each result's paper.id (CorpusId:…) works with the other tools.",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string" },
+        query: { type: "string", description: "Plain-text query." },
         limit: { type: "integer", minimum: 1, maximum: 1000, default: 10 },
         paperIds: {
           type: "string",
-          description: "Comma list of paper ids to restrict to.",
+          description: `Comma list of up to ~100 paper ids to search within. ${paperIdDesc}`,
         },
         year: s2Filters.year,
+        publicationDateOrYear: s2Filters.publicationDateOrYear,
         fieldsOfStudy: s2Filters.fieldsOfStudy,
+        venue: s2Filters.venue,
+        minCitationCount: s2Filters.minCitationCount,
       },
       required: ["query"],
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
     async handler(args, ctx) {
+      const paperIds = (args.paperIds as string | undefined)
+        ?.split(",")
+        .filter((id) => id.trim())
+        .map((id) => parseIdentifier(id).s2Query)
+        .join(",");
       const res = await ctx.s2.snippetSearch(ctx.stats, {
         query: args.query,
         limit: args.limit,
-        paperIds: args.paperIds,
+        paperIds,
         year: args.year,
+        publicationDateOrYear: args.publicationDateOrYear,
         fieldsOfStudy: args.fieldsOfStudy,
+        venue: args.venue,
+        minCitationCount: args.minCitationCount,
       });
-      return {
-        results: (res.data ?? []).map((row: any) => ({
-          score: row.score,
-          text: row.snippet?.text,
-          section: row.snippet?.section,
-          paper: row.paper,
-        })),
-      };
+      return { results: (res.data ?? []).map(compactSnippet) };
     },
   },
   {
@@ -606,13 +614,21 @@ export const TOOLS: ToolDef[] = [
     async handler(args, ctx) {
       const lib = resolveLibraryID(args.library_id);
       const parsed = (args.ids as string[]).map(parseIdentifier);
-      const papers: Array<S2Paper | null> = args.resolve_via_s2
-        ? await ctx.s2.paperBatch(
+      let papers: Array<S2Paper | null> = parsed.map(() => null);
+      let warning: string | undefined;
+      if (args.resolve_via_s2) {
+        // The library check still works without S2 (e.g. no API key yet)
+        try {
+          papers = await ctx.s2.paperBatch(
             ctx.stats,
             parsed.map((p) => p.s2Query),
             "paperId,corpusId,externalIds,title,year",
-          )
-        : parsed.map(() => null);
+          );
+        } catch (e) {
+          if (!(e instanceof S2Error)) throw e;
+          warning = `Matched by the given ids only; Semantic Scholar lookup failed: ${e.message}`;
+        }
+      }
       const results = [];
       for (let i = 0; i < parsed.length; i++) {
         const ids = papers[i]
@@ -625,7 +641,7 @@ export const TOOLS: ToolDef[] = [
           item: item ? describeItem(item) : null,
         });
       }
-      return { results };
+      return warning ? { warning, results } : { results };
     },
   },
   {
@@ -857,8 +873,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "zotero_enrich_items",
     title: "Enrich items from Semantic Scholar",
-    description:
-      "Match existing Zotero items on Semantic Scholar (by S2 id, DOI, arXiv, else title) and fill in missing fields (abstract, date, venue, DOI, authors). Records the S2 id in Extra. With overwrite=true existing values are replaced.",
+    description: `Match up to ${MAX_ADD} existing Zotero items on Semantic Scholar (by S2 id, DOI, arXiv, else title) and fill in missing fields (abstract, date, venue, DOI, authors). Records the S2 id in Extra. With overwrite=true existing values are replaced.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -866,7 +881,8 @@ export const TOOLS: ToolDef[] = [
           type: "array",
           items: { type: "string" },
           minItems: 1,
-          maxItems: 50,
+          // Items without ids need one title match each, at 1 request/second
+          maxItems: MAX_ADD,
         },
         overwrite: { type: "boolean", default: false },
         library_id: libraryID,
@@ -903,5 +919,8 @@ export const TOOLS: ToolDef[] = [
     },
   },
 ];
+
+// prepareArgs() rejects unknown arguments; advertise that to clients
+for (const tool of TOOLS) tool.inputSchema.additionalProperties = false;
 
 export const TOOLS_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));

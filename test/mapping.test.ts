@@ -1,6 +1,7 @@
 import { assert } from "chai";
 import { mergeExtra, s2ToZotero, splitName } from "../src/zotero/s2ToZotero";
 import { parseIdentifier } from "../src/zotero/identifiers";
+import { compactSnippet } from "../src/s2/fields";
 import { ARXIV_ONLY, ATTENTION, DEEP_LEARNING } from "./fixtures";
 
 describe("s2ToZotero", function () {
@@ -63,6 +64,30 @@ describe("splitName", function () {
   });
 });
 
+describe("compactSnippet", function () {
+  it("keeps the text and a usable paper id, drops the disclaimer", function () {
+    const row = compactSnippet({
+      score: 0.56,
+      snippet: {
+        text: "We describe deployed models.",
+        snippetKind: "body",
+        section: "Conclusion",
+      },
+      paper: {
+        corpusId: "19170988",
+        title: "Construction of the Literature Graph in Semantic Scholar",
+        authors: Array.from({ length: 10 }, (_, i) => `Author ${i}`),
+        openAccessInfo: { disclaimer: "Notice: …" },
+      } as any,
+    });
+    assert.deepEqual(row.paper.id, "CorpusId:19170988");
+    assert.equal(row.kind, "body");
+    assert.lengthOf(row.paper.authors, 9);
+    assert.equal(row.paper.authors[8], "+2 more");
+    assert.notProperty(row.paper, "openAccessInfo");
+  });
+});
+
 describe("mergeExtra", function () {
   it("adds only missing keys", function () {
     assert.equal(
@@ -88,6 +113,8 @@ describe("parseIdentifier", function () {
       "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
     ],
     ["PMID:26017442", "PMID:26017442"],
+    ["pmid: 26017442", "PMID:26017442"],
+    ["pmcid:2323736", "PMCID:2323736"],
     [
       "https://www.nature.com/articles/x",
       "URL:https://www.nature.com/articles/x",

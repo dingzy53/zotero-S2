@@ -46,6 +46,8 @@ async function createFromS2(
   collectionID: number | null,
 ): Promise<Zotero.Item> {
   const mapped = s2ToZotero(paper);
+  // Provenance, as Zotero's translators record it ("arXiv.org", "DOI.org (Crossref)")
+  mapped.fields.libraryCatalog = "Semantic Scholar";
   const item = new Zotero.Item(mapped.itemType as any);
   item.libraryID = libraryID;
   if (!isValidField(item.itemTypeID, "DOI") && mapped.fields.DOI) {

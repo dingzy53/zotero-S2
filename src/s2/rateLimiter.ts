@@ -9,6 +9,7 @@ export const defaultSleep: Sleep = (ms) =>
  */
 export class RateLimiter {
   private lastStart = -Infinity;
+  private notBefore = -Infinity;
   private tail: Promise<void> = Promise.resolve();
 
   constructor(
@@ -19,12 +20,23 @@ export class RateLimiter {
 
   schedule<T>(task: () => Promise<T>): Promise<T> {
     const slot = this.tail.then(async () => {
-      const wait = this.lastStart + this.intervalMs - this.now();
-      if (wait > 0) await this.sleep(wait);
+      // Loop: a pause() may arrive while we're already waiting for our slot
+      for (;;) {
+        const wait =
+          Math.max(this.lastStart + this.intervalMs, this.notBefore) -
+          this.now();
+        if (wait <= 0) break;
+        await this.sleep(wait);
+      }
       this.lastStart = this.now();
     });
     this.tail = slot.catch(() => {});
     return slot.then(task);
+  }
+
+  /** Holds every queued task for `ms` from now, e.g. after a 429. */
+  pause(ms: number) {
+    this.notBefore = Math.max(this.notBefore, this.now() + ms);
   }
 }
 

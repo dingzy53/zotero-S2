@@ -1,5 +1,10 @@
 import { RateLimiter, Sleep, defaultSleep } from "./rateLimiter";
-import { AUTHOR_FIELDS, FULL_FIELDS, SEARCH_FIELDS } from "./fields";
+import {
+  AUTHOR_FIELDS,
+  FULL_FIELDS,
+  SEARCH_FIELDS,
+  SNIPPET_FIELDS,
+} from "./fields";
 import { CallStats, S2Paper } from "./types";
 
 export const GRAPH_BASE = "https://api.semanticscholar.org/graph/v1";
@@ -151,9 +156,14 @@ export class S2Client {
         );
       }
       stats.retries++;
-      await this.sleep(
-        backoffDelay(attempt, res?.header("Retry-After") ?? null, this.random),
+      const delay = backoffDelay(
+        attempt,
+        res?.header("Retry-After") ?? null,
+        this.random,
       );
+      // A 429 is about the key, not this request: hold every caller back
+      if (res?.status === 429) this.limiter.pause(delay);
+      await this.sleep(delay);
     }
   }
 
@@ -171,10 +181,26 @@ export class S2Client {
     });
   }
 
-  matchTitle(stats: CallStats, title: string, fields = SEARCH_FIELDS) {
-    return this.request(`${GRAPH_BASE}/paper/search/match`, stats, {
-      query: { query: title, fields },
-    });
+  /** The closest title match, or `null` when S2 finds none. */
+  async matchTitle(
+    stats: CallStats,
+    title: string,
+    fields = SEARCH_FIELDS,
+  ): Promise<(S2Paper & { matchScore?: number }) | null> {
+    try {
+      const res = await this.request(
+        `${GRAPH_BASE}/paper/search/match`,
+        stats,
+        {
+          query: { query: title, fields },
+        },
+      );
+      return res?.data?.[0] ?? null;
+    } catch (e) {
+      // S2 answers 404 "Title match not found"; anything else is a real failure
+      if (e instanceof S2Error && e.status === 404) return null;
+      throw e;
+    }
   }
 
   /** Returns one entry per id, `null` where S2 has no match. */
@@ -236,7 +262,9 @@ export class S2Client {
   }
 
   snippetSearch(stats: CallStats, query: Query) {
-    return this.request(`${GRAPH_BASE}/snippet/search`, stats, { query });
+    return this.request(`${GRAPH_BASE}/snippet/search`, stats, {
+      query: { fields: SNIPPET_FIELDS, ...query },
+    });
   }
 }
 

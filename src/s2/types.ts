@@ -37,6 +37,13 @@ export interface S2Paper {
   tldr?: { text?: string } | null;
 }
 
+/** A `/snippet/search` result row (only the fields we read). */
+export interface S2SnippetMatch {
+  score?: number;
+  snippet?: { text?: string; snippetKind?: string; section?: string };
+  paper?: { corpusId?: string; title?: string; authors?: string[] };
+}
+
 /** Per-tool-call counters, surfaced in the activity log. */
 export interface CallStats {
   s2Calls: number;

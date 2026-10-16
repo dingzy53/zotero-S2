@@ -10,6 +10,15 @@ import { RateLimiter } from "../src/s2/rateLimiter";
 import { newStats } from "../src/s2/types";
 import { fakeClock, response } from "./helpers";
 
+/** Records pauses so tests can tell a shared cooldown from a private backoff. */
+class SpyLimiter extends RateLimiter {
+  pauses: number[] = [];
+  pause(ms: number) {
+    this.pauses.push(ms);
+    super.pause(ms);
+  }
+}
+
 function client(replies: Array<() => ReturnType<Transport>>, apiKey = "k") {
   const clock = fakeClock();
   const seen: Array<{ url: string; headers: Record<string, string> }> = [];
@@ -19,14 +28,15 @@ function client(replies: Array<() => ReturnType<Transport>>, apiKey = "k") {
     const next = replies[Math.min(i++, replies.length - 1)];
     return next();
   };
+  const limiter = new SpyLimiter(1050, clock.now, clock.sleep);
   const s2 = new S2Client({
     apiKey: () => apiKey,
     transport,
-    limiter: new RateLimiter(1050, clock.now, clock.sleep),
+    limiter,
     sleep: clock.sleep,
     random: () => 0,
   });
-  return { s2, clock, seen };
+  return { s2, clock, seen, limiter };
 }
 
 describe("RateLimiter", function () {
@@ -56,6 +66,38 @@ describe("RateLimiter", function () {
     const ok = limiter.schedule(async () => "ok");
     await failed.catch(() => {});
     assert.equal(await ok, "ok");
+  });
+
+  it("holds the next task for a pause", async function () {
+    const clock = fakeClock();
+    const limiter = new RateLimiter(1050, clock.now, clock.sleep);
+    const starts: number[] = [];
+    await limiter.schedule(async () => {
+      starts.push(clock.now());
+      limiter.pause(5000);
+    });
+    await limiter.schedule(async () => {
+      starts.push(clock.now());
+    });
+    assert.isAtLeast(starts[1] - starts[0], 5000);
+  });
+
+  it("holds a task already waiting for its slot (real timers)", async function () {
+    const limiter = new RateLimiter(20);
+    const starts: number[] = [];
+    await Promise.all([
+      limiter.schedule(async () => {
+        starts.push(Date.now());
+        await new Promise((r) => setTimeout(r, 5));
+        // Arrives while the second task sleeps toward its 20 ms slot
+        limiter.pause(150);
+      }),
+      limiter.schedule(async () => {
+        starts.push(Date.now());
+      }),
+    ]);
+    // 5 ms of timer slack
+    assert.isAtLeast(starts[1] - starts[0], 150);
   });
 });
 
@@ -105,7 +147,7 @@ describe("S2Client", function () {
   });
 
   it("retries 429 and 503 with backoff, honoring Retry-After", async function () {
-    const { s2, clock } = client([
+    const { s2, clock, limiter } = client([
       async () =>
         response(429, { message: "Too Many Requests" }, { "Retry-After": "3" }),
       async () => response(503, {}),
@@ -119,6 +161,8 @@ describe("S2Client", function () {
     // Backoff sleeps (3000 from Retry-After, then 2000) interleave with limiter waits
     assert.include(clock.sleeps, 3000);
     assert.include(clock.sleeps, 2000);
+    // Only the 429 holds back every other caller
+    assert.deepEqual(limiter.pauses, [3000]);
   });
 
   it("retries network errors (status 0 / thrown)", async function () {
@@ -184,6 +228,19 @@ describe("S2Client", function () {
       // 5 ms of timer slack
       assert.isAtLeast(starts[i] - starts[i - 1], 95);
     }
+  });
+
+  it("treats a title-match 404 as no match, but not other errors", async function () {
+    const { s2 } = client([
+      async () => response(404, { error: "Title match not found" }),
+    ]);
+    assert.isNull(await s2.matchTitle(newStats(), "nothing like this"));
+    const { s2: denied } = client([
+      async () => response(403, { message: "Forbidden" }),
+    ]);
+    const err = await denied.matchTitle(newStats(), "x").catch((e) => e);
+    assert.instanceOf(err, S2Error);
+    assert.equal(err.status, 403);
   });
 
   it("builds the batch request and flag-style query params", async function () {

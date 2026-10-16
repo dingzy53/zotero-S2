@@ -1,6 +1,8 @@
 import { assert } from "chai";
 import { TOOLS_BY_NAME } from "../src/mcp/tools";
+import { ToolError } from "../src/mcp/errors";
 import { prepareArgs } from "../src/mcp/schema";
+import { S2Client } from "../src/s2/client";
 import { newStats } from "../src/s2/types";
 import { resolveCollection } from "../src/zotero/collections";
 import { ATTENTION, DEEP_LEARNING, ARXIV_ONLY } from "./fixtures";
@@ -79,6 +81,7 @@ describe("zotero_add_papers", function () {
     );
     assert.isTrue(att.hasTag("agent"));
     assert.lengthOf(att.getNotes(), 1);
+    assert.equal(att.getField("libraryCatalog"), "Semantic Scholar");
 
     const dl = Zotero.Items.getByLibraryAndKey(
       Zotero.Libraries.userLibraryID,
@@ -152,6 +155,30 @@ describe("zotero_find_in_library", function () {
     assert.lengthOf(calls, 1);
     assert.isTrue(res.results[0].inLibrary);
   });
+
+  it("falls back to local matching when S2 fails", async function () {
+    const tool = TOOLS_BY_NAME.get("zotero_find_in_library")!;
+    // No API key: the client refuses before any request
+    const s2 = new S2Client({ apiKey: () => "" });
+    const res = (await tool.handler(
+      prepareArgs(tool.inputSchema, { ids: ["DOI:10.1038/nature14539"] }),
+      { s2, stats: newStats() },
+    )) as any;
+    assert.match(res.warning, /No Semantic Scholar API key/);
+    assert.isTrue(res.results[0].inLibrary);
+  });
+});
+
+describe("s2_match_title", function () {
+  it("returns the best match, or a ToolError when there is none", async function () {
+    const res = await runTool("s2_match_title", { title: DEEP_LEARNING.title });
+    assert.equal(res.paper.paperId, DEEP_LEARNING.paperId);
+    assert.equal(res.matchScore, 99);
+    const err = await runTool("s2_match_title", {
+      title: "No such paper",
+    }).catch((e) => e);
+    assert.instanceOf(err, ToolError);
+  });
 });
 
 describe("zotero_enrich_items", function () {
@@ -170,6 +197,35 @@ describe("zotero_enrich_items", function () {
     assert.include(
       item.getField("extra") as string,
       `S2 Paper ID: ${DEEP_LEARNING.paperId}`,
+    );
+  });
+
+  it("matches an item without ids by its title", async function () {
+    const item = new Zotero.Item("conferencePaper");
+    item.setField("title", ATTENTION.title!);
+    await item.saveTx();
+    const calls: string[] = [];
+    const res = await runTool(
+      "zotero_enrich_items",
+      { item_keys: [item.key] },
+      calls,
+    );
+    assert.lengthOf(calls, 1, "no batch call, one title match");
+    assert.isTrue(res.results[0].matched);
+    assert.equal(res.results[0].paperId, ATTENTION.paperId);
+    assert.include(res.results[0].changed, "creators");
+  });
+});
+
+describe("tool schemas", function () {
+  it("declare additionalProperties: false, matching prepareArgs", function () {
+    for (const tool of TOOLS_BY_NAME.values()) {
+      assert.isFalse(tool.inputSchema.additionalProperties, tool.name);
+    }
+    const tool = TOOLS_BY_NAME.get("zotero_list_collections")!;
+    assert.throws(
+      () => prepareArgs(tool.inputSchema, { bogus: 1 }),
+      /Unknown argument "bogus"/,
     );
   });
 });
