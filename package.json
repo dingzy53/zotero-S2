@@ -14,13 +14,21 @@
   ],
   "config": {
     "addonName": "Zotero S2",
-    "addonID": "zotero-s2@dingzhengyuan.dev",
+    "addonID": "zotero-s2@dingzy53.github.io",
     "addonRef": "zoteros2",
     "addonInstance": "ZoteroS2",
     "prefsPrefix": "extensions.zotero.zoteros2"
   },
   "author": "Ding Zheng Yuan",
   "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dingzy53/zotero-S2.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dingzy53/zotero-S2/issues"
+  },
+  "homepage": "https://github.com/dingzy53/zotero-S2#readme",
   "scripts": {
     "start": "zotero-plugin serve",
     "build": "zotero-plugin build && tsc --noEmit",
@@ -60,9 +68,5 @@
         }
       }
     ]
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/OWNER/zotero-S2.git"
   }
 }

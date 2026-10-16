@@ -9,11 +9,11 @@ export default defineConfig({
   namespace: pkg.config.addonRef,
   // Default would be kebab-case of the name: "zotero-s-2"
   xpiName: "zotero-s2",
-  // Zotero requires an update_url. Until package.json "repository" names the
-  // real GitHub repo (currently a placeholder), point it nowhere so no third
-  // party can serve updates. Then switch to:
-  // https://github.com/{{owner}}/{{repo}}/releases/download/release/update.json
-  updateURL: "https://localhost/zotero-s2/update.json",
+  // {{owner}}/{{repo}} come from package.json "repository". Every installed
+  // copy polls this URL, so it must stay under a repo we control.
+  updateURL: `https://github.com/{{owner}}/{{repo}}/releases/download/release/${
+    pkg.version.includes("-") ? "update-beta.json" : "update.json"
+  }`,
   xpiDownloadLink:
     "https://github.com/{{owner}}/{{repo}}/releases/download/v{{version}}/{{xpiName}}.xpi",
 
@@ -23,6 +23,7 @@ export default defineConfig({
       ...pkg.config,
       author: pkg.author,
       description: pkg.description,
+      homepage: pkg.homepage,
       buildVersion: pkg.version,
       buildTime: "{{buildTime}}",
     },
