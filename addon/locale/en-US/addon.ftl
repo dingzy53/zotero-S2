@@ -1,0 +1,14 @@
+prefs-title = Zotero S2
+log-empty = No calls yet.
+log-col-time = Time
+log-col-via = Via
+log-col-tool = Tool
+log-col-args = Arguments
+log-col-duration = Duration
+log-col-s2 = S2 calls
+log-col-retries = Retries
+log-col-status = Status
+test-running = Testing…
+test-ok = OK: Semantic Scholar accepted the API key.
+test-failed = Failed: { $error }
+copied = Copied
