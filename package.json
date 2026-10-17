@@ -20,7 +20,7 @@
     "prefsPrefix": "extensions.zotero.zoteros2"
   },
   "author": "Ding Zheng Yuan",
-  "license": "AGPL-3.0-or-later",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dingzy53/zotero-S2.git"

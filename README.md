@@ -3,7 +3,7 @@
 [![CI](https://github.com/dingzy53/zotero-S2/actions/workflows/ci.yml/badge.svg)](https://github.com/dingzy53/zotero-S2/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/dingzy53/zotero-S2)](https://github.com/dingzy53/zotero-S2/releases/latest)
 [![Zotero 10](https://img.shields.io/badge/Zotero-10-cc2936)](https://www.zotero.org/)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 A Zotero 10 plugin that lets AI agents search [Semantic Scholar](https://www.semanticscholar.org/product/api) and file papers, with PDFs, into your Zotero collections.
 
@@ -130,6 +130,6 @@ Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE). Built on [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template).
+[MIT](LICENSE). Built on [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template).
 
 This is an independent project. It is not affiliated with or endorsed by Semantic Scholar, the Allen Institute for AI, Zotero, or the Corporation for Digital Scholarship.
