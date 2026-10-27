@@ -83,12 +83,18 @@ async function createFromTranslator(
     } as any);
     const item = items[0];
     if (!item) return null;
-    // Tag our provenance so later dedupe is exact
-    const extra = item.getField("extra") as string;
-    const merged = mergeExtra(extra, s2ToZotero(paper).extra);
-    if (merged !== extra) {
-      item.setField("extra", merged);
-      await item.saveTx();
+    // The item is saved. If tagging it fails, still return it: throwing
+    // would make createItem() fall back to S2 and create a second copy
+    try {
+      // Tag our provenance so later dedupe is exact
+      const extra = item.getField("extra") as string;
+      const merged = mergeExtra(extra, s2ToZotero(paper).extra);
+      if (merged !== extra) {
+        item.setField("extra", merged);
+        await item.saveTx();
+      }
+    } catch (e) {
+      Zotero.logError(e as Error);
     }
     return item;
   });

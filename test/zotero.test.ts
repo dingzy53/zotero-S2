@@ -6,6 +6,7 @@ import { S2Client } from "../src/s2/client";
 import { RateLimiter } from "../src/s2/rateLimiter";
 import { newStats } from "../src/s2/types";
 import { resolveCollection } from "../src/zotero/collections";
+import { createItem } from "../src/zotero/importer";
 import { ATTENTION, DEEP_LEARNING, ARXIV_ONLY } from "./fixtures";
 import { fixtureClient, response } from "./helpers";
 
@@ -168,6 +169,48 @@ describe("zotero_add_papers", function () {
         prepareArgs(tool.inputSchema, { ids: Array(26).fill("1706.03762") }),
       /at most 25/,
     );
+  });
+});
+
+describe("createItem (translator)", function () {
+  it("keeps the translated item when tagging its Extra fails", async function () {
+    const title = `Translated item ${Date.now()}`;
+    // Offline stand-in for Zotero's DOI translator: it saves a real item,
+    // whose next save (our Extra provenance) then fails
+    const translate = Zotero.Translate as any;
+    const original = translate.Search;
+    translate.Search = class {
+      setIdentifier() {}
+      async getTranslators() {
+        return [{}];
+      }
+      setTranslator() {}
+      async translate({ libraryID }: { libraryID: number }) {
+        const item = new Zotero.Item("journalArticle");
+        item.libraryID = libraryID;
+        item.setField("title", title);
+        await item.saveTx();
+        item.saveTx = async () => {
+          throw new Error("save failed");
+        };
+        return [item];
+      }
+    };
+    try {
+      const lib = Zotero.Libraries.userLibraryID;
+      const res = await createItem(
+        lib,
+        { ...DEEP_LEARNING, title },
+        null,
+        "translator",
+      );
+      assert.equal(res.source, "translator");
+      const s = new Zotero.Search({ libraryID: lib });
+      s.addCondition("title", "is", title);
+      assert.lengthOf(await s.search(), 1, "no S2 fallback copy");
+    } finally {
+      translate.Search = original;
+    }
   });
 });
 
