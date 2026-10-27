@@ -35,6 +35,7 @@ import {
 import { PdfStatus, attachPDF } from "../zotero/pdf";
 import { Attachments, RecognizeDocument } from "../zotero/apis";
 import { s2ToZotero } from "../zotero/s2ToZotero";
+import { libraryWrites } from "../zotero/writeLock";
 import { ToolError, errorMessage } from "./errors";
 import { JSONSchema } from "./schema";
 
@@ -732,25 +733,31 @@ export const TOOLS: ToolDef[] = [
           continue;
         }
         try {
-          let item = await findExisting(lib, idsFromPaper(paper));
-          if (item) {
-            row.existing = true;
-            if (collectionID && !item.inCollection(collectionID)) {
-              item.addToCollection(collectionID);
-              await item.saveTx();
+          // A parallel call must not create the same item between our check and create
+          const item = await libraryWrites.run(async () => {
+            const found = await findExisting(lib, idsFromPaper(paper));
+            let item: Zotero.Item;
+            if (found) {
+              item = found;
+              row.existing = true;
+              if (collectionID && !item.inCollection(collectionID)) {
+                item.addToCollection(collectionID);
+                await item.saveTx();
+              }
+            } else {
+              const created = await createItem(
+                lib,
+                paper,
+                collectionID,
+                args.metadata_source,
+              );
+              item = created.item;
+              row.existing = false;
+              row.metadataSource = created.source;
             }
-          } else {
-            const created = await createItem(
-              lib,
-              paper,
-              collectionID,
-              args.metadata_source,
-            );
-            item = created.item;
-            row.existing = false;
-            row.metadataSource = created.source;
-          }
-          await addTagsAndNote(item, args.tags, args.note);
+            await addTagsAndNote(item, args.tags, args.note);
+            return item;
+          });
           row.itemKey = item.key;
           row.title = item.getField("title") as string;
           work.push({ row, item, paper });

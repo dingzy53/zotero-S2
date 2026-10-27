@@ -47,6 +47,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 | `src/zotero/dedupe.ts`                                           | Finds existing items (DOI → arXiv → S2 id → CorpusId → title + year). Item describers.                                                                       |
 | `src/zotero/pdf.ts`                                              | **The only place PDFs are attached.** Order: S2 OA → arXiv → Zotero resolvers.                                                                               |
 | `src/zotero/collections.ts`                                      | Resolves libraries and collections by key or `A/B/C` path, creating them if needed.                                                                          |
+| `src/zotero/writeLock.ts`                                        | `libraryWrites`: serializes find-or-create so parallel tool calls don't duplicate collections or items.                                                      |
 | `src/zotero/apis.ts`                                             | Typed shims for Zotero APIs that `zotero-types` lacks or mistypes.                                                                                           |
 | `src/modules/preferences.ts` + `addon/content/preferences.xhtml` | Settings pane: API key, token, copy command, activity log.                                                                                                   |
 | `src/log/activity.ts`                                            | Ring buffer of recent calls, shown in the prefs pane.                                                                                                        |
@@ -99,6 +100,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - A title match from S2 is used only when the normalized titles are equal and the years don't conflict (`isSameWork`). S2 returns its closest title even for a different paper, and a wrong match would leave an `S2 Paper ID:` in Extra that later lookups and dedupe trust.
 - Translator imports must use `saveAttachments: false` and run through the 3 s `translatorLimiter` (arXiv's policy). PDFs come only from `pdf.ts`.
 - `attachPDF()` runs at most one attempt per item at a time and re-checks `hasPDF()` once it holds a download slot. Two ids for one paper (e.g. its DOI and arXiv id) or a repeated item key must not attach two PDFs.
+- Find-or-create runs under `libraryWrites` (`src/zotero/writeLock.ts`): `resolveCollection()` and each item in `zotero_add_papers` (find, create, tags, note). Agents call tools in parallel, and two calls that both miss would both create. The lock isn't reentrant, so never take it while holding it, and keep PDF downloads outside it.
 - Target `libraryID` and collections explicitly. Never read the UI selection. In Zotero 10 the singular selection getters throw.
 
 ## Zotero 10 / toolchain gotchas (learned the hard way)

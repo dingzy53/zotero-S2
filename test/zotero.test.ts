@@ -36,6 +36,26 @@ describe("collections", function () {
     assert.equal(byKey.collection.id, first.collection.id);
   });
 
+  it("creates a path once when asked in parallel", async function () {
+    const lib = Zotero.Libraries.userLibraryID;
+    const path = `${ROOT}/Parallel/Leaf`;
+    const [a, b] = await Promise.all([
+      resolveCollection(lib, path, true),
+      resolveCollection(lib, path, true),
+    ]);
+    assert.equal(a.collection.id, b.collection.id);
+    assert.deepEqual([a.created, b.created].sort(), [false, true]);
+    const root = Zotero.Collections.getByLibrary(lib).find(
+      (c) => c.name === ROOT,
+    )!;
+    assert.lengthOf(
+      Zotero.Collections.getByParent(root.id).filter(
+        (c) => c.name === "Parallel",
+      ),
+      1,
+    );
+  });
+
   it("lists collections with slash paths", async function () {
     const res = await runTool("zotero_list_collections", {});
     assert.include(
@@ -117,6 +137,28 @@ describe("zotero_add_papers", function () {
     });
     assert.equal(res.results[0].itemKey, manual.key);
     assert.isTrue(res.results[0].existing);
+  });
+
+  it("creates one item when the same paper is added in parallel", async function () {
+    const paper = {
+      ...ARXIV_ONLY,
+      paperId: "fedcba9876543210fedcba9876543210fedcba98",
+      corpusId: 999999002,
+      externalIds: { ArXiv: "2401.99999", CorpusId: 999999002 },
+      title: "Parallel adds must not duplicate this preprint",
+    };
+    const tool = TOOLS_BY_NAME.get("zotero_add_papers")!;
+    const add = () =>
+      tool.handler(
+        prepareArgs(tool.inputSchema, {
+          ids: ["ARXIV:2401.99999"],
+          attach_pdf: false,
+        }),
+        { s2: fixtureClient([paper]), stats: newStats() },
+      ) as Promise<any>;
+    const [a, b] = await Promise.all([add(), add()]);
+    assert.equal(a.results[0].itemKey, b.results[0].itemKey);
+    assert.equal(a.summary.added + b.summary.added, 1);
   });
 
   it("rejects more than 25 ids", async function () {

@@ -1,4 +1,5 @@
 import { ToolError } from "../mcp/errors";
+import { libraryWrites } from "./writeLock";
 
 const KEY_RE = /^[23456789ABCDEFGHIJKLMNPQRSTUVWXYZ]{8}$/;
 
@@ -64,7 +65,15 @@ export function findCollection(
 }
 
 /** Resolves (and with `create`, builds) every segment of a collection path. */
-export async function resolveCollection(
+export function resolveCollection(
+  libraryID: number,
+  ref: string,
+  create: boolean,
+): Promise<{ collection: Zotero.Collection; created: boolean }> {
+  return libraryWrites.run(() => resolveUnlocked(libraryID, ref, create));
+}
+
+async function resolveUnlocked(
   libraryID: number,
   ref: string,
   create: boolean,
