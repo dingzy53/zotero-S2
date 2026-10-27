@@ -6,7 +6,7 @@ import {
   Transport,
   backoffDelay,
 } from "../src/s2/client";
-import { RateLimiter } from "../src/s2/rateLimiter";
+import { RateLimiter, Semaphore } from "../src/s2/rateLimiter";
 import { newStats } from "../src/s2/types";
 import { fakeClock, response } from "./helpers";
 
@@ -98,6 +98,29 @@ describe("RateLimiter", function () {
     ]);
     // 5 ms of timer slack
     assert.isAtLeast(starts[1] - starts[0], 150);
+  });
+});
+
+describe("Semaphore", function () {
+  it("hands a freed slot to the waiter, not a newcomer", async function () {
+    const sem = new Semaphore(1);
+    let running = 0;
+    let peak = 0;
+    const track = async () => {
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 5));
+      running--;
+    };
+    let releaseA!: () => void;
+    const a = sem.run(() => new Promise<void>((r) => (releaseA = r)));
+    const b = sem.run(track);
+    releaseA();
+    // Runs after A's release but before B resumes: the gap a newcomer used
+    let c!: Promise<void>;
+    await Promise.resolve().then(() => (c = sem.run(track)));
+    await Promise.all([a, b, c]);
+    assert.equal(peak, 1);
   });
 });
 

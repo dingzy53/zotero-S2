@@ -40,7 +40,7 @@ export class RateLimiter {
   }
 }
 
-/** Caps how many tasks run at once (used for PDF downloads). */
+/** Caps how many tasks run at once (PDF downloads, library writes). */
 export class Semaphore {
   private active = 0;
   private waiting: Array<() => void> = [];
@@ -49,14 +49,19 @@ export class Semaphore {
 
   async run<T>(task: () => Promise<T>): Promise<T> {
     if (this.active >= this.max) {
+      // The releasing task hands us its slot, so `active` already counts us
       await new Promise<void>((resolve) => this.waiting.push(resolve));
+    } else {
+      this.active++;
     }
-    this.active++;
     try {
       return await task();
     } finally {
-      this.active--;
-      this.waiting.shift()?.();
+      // Hand over directly: freeing the slot first would let a new caller
+      // take it before the waiter resumes, and both would run
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.active--;
     }
   }
 }
