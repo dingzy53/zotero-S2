@@ -3,10 +3,11 @@ import { TOOLS_BY_NAME } from "../src/mcp/tools";
 import { ToolError } from "../src/mcp/errors";
 import { prepareArgs } from "../src/mcp/schema";
 import { S2Client } from "../src/s2/client";
+import { RateLimiter } from "../src/s2/rateLimiter";
 import { newStats } from "../src/s2/types";
 import { resolveCollection } from "../src/zotero/collections";
 import { ATTENTION, DEEP_LEARNING, ARXIV_ONLY } from "./fixtures";
-import { fixtureClient } from "./helpers";
+import { fixtureClient, response } from "./helpers";
 
 const ROOT = `S2 Test ${Date.now()}`;
 
@@ -248,6 +249,36 @@ describe("zotero_enrich_items", function () {
     assert.isTrue(res.results[0].matched);
     assert.equal(res.results[0].paperId, ATTENTION.paperId);
     assert.include(res.results[0].changed, "creators");
+  });
+
+  it("rejects a title match for a different paper", async function () {
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", "Attention is all you need in survey form");
+    await item.saveTx();
+    // S2 answers with its closest title, which is another paper
+    const s2 = new S2Client({
+      apiKey: () => "test-key",
+      transport: async () =>
+        response(200, { data: [{ ...ATTENTION, matchScore: 40 }] }),
+      limiter: new RateLimiter(0),
+    });
+    const tool = TOOLS_BY_NAME.get("zotero_enrich_items")!;
+    const res = (await tool.handler(
+      prepareArgs(tool.inputSchema, { item_keys: [item.key] }),
+      { s2, stats: newStats() },
+    )) as any;
+    assert.isFalse(res.results[0].matched);
+    assert.equal(item.getField("extra"), "", "no S2 id recorded");
+  });
+
+  it("rejects a title match whose year differs", async function () {
+    const item = new Zotero.Item("book");
+    item.setField("title", "Deep Learning");
+    item.setField("date", "2016");
+    await item.saveTx();
+    const res = await runTool("zotero_enrich_items", { item_keys: [item.key] });
+    assert.isFalse(res.results[0].matched);
+    assert.equal(item.numCreators(), 0);
   });
 });
 

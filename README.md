@@ -73,7 +73,7 @@ Then just ask, for example: _"Find the most-cited papers on retrieval-augmented 
 | `zotero_add_papers`                                                                     | Add up to 25 papers to a collection, with PDFs, tags and a note. Metadata comes from S2 or from Zotero's DOI/arXiv translators                            |
 | `zotero_attach_pdf`                                                                     | Find and attach PDFs for up to 25 existing items                                                                                                          |
 | `zotero_add_pdf_from_url`                                                               | Download a PDF and attach it to an item, or save it standalone and let Zotero recognize its metadata                                                      |
-| `zotero_enrich_items`                                                                   | Fill missing metadata on up to 25 existing items from S2                                                                                                  |
+| `zotero_enrich_items`                                                                   | Fill missing metadata on up to 25 existing items from S2; items without ids need an exact title (and no conflicting year)                                 |
 
 Every call appears in the **Activity** table in settings, with its duration, number of S2 requests, retries and any error.
 

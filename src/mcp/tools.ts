@@ -19,8 +19,13 @@ import {
   itemArxiv,
   itemDOI,
   itemS2Id,
+  itemYear,
 } from "../zotero/dedupe";
-import { idsFromPaper, parseIdentifier } from "../zotero/identifiers";
+import {
+  idsFromPaper,
+  normalizeTitle,
+  parseIdentifier,
+} from "../zotero/identifiers";
 import {
   MetadataSource,
   addTagsAndNote,
@@ -157,10 +162,21 @@ async function lookupItems(
     for (let i = 0; i < items.length; i++) {
       if (papers[i]) continue;
       const title = items[i].getField("title") as string;
-      if (title) papers[i] = await ctx.s2.matchTitle(ctx.stats, title, fields);
+      if (!title) continue;
+      const match = await ctx.s2.matchTitle(ctx.stats, title, fields);
+      // S2 returns its closest title even for a different paper. A wrong
+      // match would write its S2 id into Extra, and later runs trust that id
+      if (match && isSameWork(items[i], match)) papers[i] = match;
     }
   }
   return papers;
+}
+
+function isSameWork(item: Zotero.Item, paper: S2Paper): boolean {
+  const title = normalizeTitle(item.getField("title") as string);
+  if (!title || title !== normalizeTitle(paper.title ?? "")) return false;
+  const year = itemYear(item);
+  return !year || !paper.year || year === paper.year;
 }
 
 // --- tools ---
@@ -873,7 +889,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "zotero_enrich_items",
     title: "Enrich items from Semantic Scholar",
-    description: `Match up to ${MAX_ADD} existing Zotero items on Semantic Scholar (by S2 id, DOI, arXiv, else title) and fill in missing fields (abstract, date, venue, DOI, authors). Records the S2 id in Extra. With overwrite=true existing values are replaced.`,
+    description: `Match up to ${MAX_ADD} existing Zotero items on Semantic Scholar (by S2 id, DOI, arXiv, else an exact title with no conflicting year) and fill in missing fields (abstract, date, venue, DOI, authors). Records the S2 id in Extra. With overwrite=true existing values are replaced.`,
     inputSchema: {
       type: "object",
       properties: {
