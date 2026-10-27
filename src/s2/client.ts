@@ -161,8 +161,10 @@ export class S2Client {
       const retryAfter = parseRetryAfter(retryAfterHeader);
       // Waiting longer would stall this call and, via pause(), every other one
       if (retryAfter !== null && retryAfter > MAX_DELAY_MS) {
+        const why =
+          status === 429 ? "is rate-limiting this API key" : "is unavailable";
         throw new S2Error(
-          `Semantic Scholar is rate-limiting this API key and asked to wait ${Math.ceil(retryAfter / 1000)} s (status ${status}). Try again later.`,
+          `Semantic Scholar ${why} and asked to wait ${Math.ceil(retryAfter / 1000)} s (status ${status}). Try again later.`,
           status,
           attempt + 1,
         );

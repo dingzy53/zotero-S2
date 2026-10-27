@@ -94,7 +94,7 @@ curl -s -X POST http://127.0.0.1:23119/s2/tools/zotero_add_papers \
 
 Semantic Scholar allows an API key 1 request per second. Every caller shares one queue that starts requests at least 1050 ms apart, so batch tools are much faster than many small calls. `s2_get_papers` takes up to 500 ids in a single request.
 
-Failed requests (429, 5xx and network errors) are retried up to 6 times with exponential backoff: 1 s, 2 s, 4 s … capped at 60 s, plus up to 500 ms of jitter, or longer if the server sends `Retry-After`. Retries go back through the same queue. A 429 pauses the whole queue, not just the request that received it.
+Failed requests (429, 5xx and network errors) are retried up to 6 times with exponential backoff: 1 s, 2 s, 4 s … capped at 60 s, plus up to 500 ms of jitter. If the server sends `Retry-After`, the plugin waits that long instead, up to 60 s; if it asks for longer, the call fails at once with a message saying how long to wait. Retries go back through the same queue. A 429 pauses the whole queue, not just the request that received it.
 
 ## Security and privacy
 
