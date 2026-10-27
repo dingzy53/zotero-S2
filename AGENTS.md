@@ -97,6 +97,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - Item metadata from S2 always writes `S2 Paper ID:` and `CorpusID:` lines into Extra, using `mergeExtra`, which never overwrites existing keys. Dedupe depends on these lines.
 - `zotero_enrich_items` defaults to filling **only empty** fields. Writing a field the item type doesn't support is skipped (`isValidField`).
 - Translator imports must use `saveAttachments: false` and run through the 3 s `translatorLimiter` (arXiv's policy). PDFs come only from `pdf.ts`.
+- `attachPDF()` runs at most one attempt per item at a time and re-checks `hasPDF()` once it holds a download slot. Two ids for one paper (e.g. its DOI and arXiv id) or a repeated item key must not attach two PDFs.
 - Target `libraryID` and collections explicitly. Never read the UI selection. In Zotero 10 the singular selection getters throw.
 
 ## Zotero 10 / toolchain gotchas (learned the hard way)

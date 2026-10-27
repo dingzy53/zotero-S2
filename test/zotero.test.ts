@@ -128,6 +128,40 @@ describe("zotero_add_papers", function () {
   });
 });
 
+describe("zotero_attach_pdf", function () {
+  it("downloads once when the same item is given twice", async function () {
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", "PDF dedupe test");
+    await item.saveTx();
+    // Stub the download so the test stays offline
+    const api = Zotero.Attachments as any;
+    const original = {
+      add: api.addFileFromURLs,
+      resolvers: api.getFileResolvers,
+    };
+    let downloads = 0;
+    api.getFileResolvers = () => [];
+    api.addFileFromURLs = async () => {
+      downloads++;
+      await Zotero.Promise.delay(50);
+      return {};
+    };
+    try {
+      const res = await runTool("zotero_attach_pdf", {
+        item_keys: [item.key, item.key],
+      });
+      assert.equal(downloads, 1);
+      assert.deepEqual(
+        res.results.map((r: any) => r.pdf),
+        ["attached", "attached"],
+      );
+    } finally {
+      api.addFileFromURLs = original.add;
+      api.getFileResolvers = original.resolvers;
+    }
+  });
+});
+
 describe("zotero_find_in_library", function () {
   it("finds items by DOI without calling S2", async function () {
     const calls: string[] = [];
