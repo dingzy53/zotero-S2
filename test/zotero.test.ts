@@ -324,6 +324,24 @@ describe("zotero_enrich_items", function () {
   });
 });
 
+describe("tool annotations", function () {
+  it("state destructiveHint on every write tool", function () {
+    // MCP assumes destructive when a non-read-only tool leaves it out
+    for (const tool of TOOLS_BY_NAME.values()) {
+      if (tool.annotations.readOnlyHint) continue;
+      assert.isBoolean(tool.annotations.destructiveHint, tool.name);
+    }
+    for (const name of [
+      "zotero_create_collection",
+      "zotero_add_papers",
+      "zotero_attach_pdf",
+      "zotero_add_pdf_from_url",
+    ]) {
+      assert.isFalse(TOOLS_BY_NAME.get(name)!.annotations.destructiveHint);
+    }
+  });
+});
+
 describe("tool schemas", function () {
   it("declare additionalProperties: false, matching prepareArgs", function () {
     for (const tool of TOOLS_BY_NAME.values()) {

@@ -545,6 +545,7 @@ export const TOOLS: ToolDef[] = [
     },
     annotations: {
       readOnlyHint: false,
+      destructiveHint: false,
       idempotentHint: true,
       openWorldHint: false,
     },
@@ -696,6 +697,7 @@ export const TOOLS: ToolDef[] = [
     },
     annotations: {
       readOnlyHint: false,
+      destructiveHint: false,
       idempotentHint: true,
       openWorldHint: true,
     },
@@ -810,6 +812,7 @@ export const TOOLS: ToolDef[] = [
     },
     annotations: {
       readOnlyHint: false,
+      destructiveHint: false,
       idempotentHint: true,
       openWorldHint: true,
     },
@@ -848,7 +851,11 @@ export const TOOLS: ToolDef[] = [
       },
       required: ["url"],
     },
-    annotations: { readOnlyHint: false, openWorldHint: true },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
     async handler(args) {
       const lib = resolveLibraryID(args.library_id, true);
       if (!/^https?:\/\//i.test(args.url))
@@ -914,6 +921,8 @@ export const TOOLS: ToolDef[] = [
     },
     annotations: {
       readOnlyHint: false,
+      // overwrite=true replaces existing field values
+      destructiveHint: true,
       idempotentHint: true,
       openWorldHint: true,
     },
