@@ -68,7 +68,9 @@ export function backoffDelay(
   let delay =
     Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** attempt) + random() * JITTER_MS;
   const retryAfter = parseRetryAfter(retryAfterHeader);
-  if (retryAfter !== null && retryAfter > delay) delay = retryAfter;
+  if (retryAfter !== null && retryAfter > delay) {
+    delay = Math.min(retryAfter, MAX_DELAY_MS);
+  }
   return delay;
 }
 
@@ -155,12 +157,18 @@ export class S2Client {
           attempt + 1,
         );
       }
+      const retryAfterHeader = res?.header("Retry-After") ?? null;
+      const retryAfter = parseRetryAfter(retryAfterHeader);
+      // Waiting longer would stall this call and, via pause(), every other one
+      if (retryAfter !== null && retryAfter > MAX_DELAY_MS) {
+        throw new S2Error(
+          `Semantic Scholar is rate-limiting this API key and asked to wait ${Math.ceil(retryAfter / 1000)} s (status ${status}). Try again later.`,
+          status,
+          attempt + 1,
+        );
+      }
       stats.retries++;
-      const delay = backoffDelay(
-        attempt,
-        res?.header("Retry-After") ?? null,
-        this.random,
-      );
+      const delay = backoffDelay(attempt, retryAfterHeader, this.random);
       // A 429 is about the key, not this request: hold every caller back
       if (res?.status === 429) this.limiter.pause(delay);
       await this.sleep(delay);

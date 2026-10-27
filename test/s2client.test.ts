@@ -127,6 +127,13 @@ describe("backoffDelay", function () {
       8000,
     );
   });
+
+  it("caps Retry-After at 60 s", function () {
+    assert.equal(
+      backoffDelay(0, "3600", () => 0),
+      60_000,
+    );
+  });
 });
 
 describe("S2Client", function () {
@@ -193,6 +200,21 @@ describe("S2Client", function () {
     for (const d of [1000, 2000, 4000, 8000, 16000, 32000]) {
       assert.include(clock.sleeps, d);
     }
+  });
+
+  it("fails fast when Retry-After exceeds the 60 s cap", async function () {
+    const { s2, clock, limiter } = client([
+      async () => response(429, {}, { "Retry-After": "3600" }),
+      async () => response(200, { data: [] }),
+    ]);
+    const stats = newStats();
+    const err = await s2.searchPapers(stats, { query: "x" }).catch((e) => e);
+    assert.instanceOf(err, S2Error);
+    assert.equal(err.status, 429);
+    assert.match(err.message, /asked to wait 3600 s/);
+    assert.equal(stats.s2Calls, 1);
+    assert.notInclude(clock.sleeps, 3_600_000);
+    assert.deepEqual(limiter.pauses, [], "other callers are not held back");
   });
 
   it("does not retry 4xx and explains auth failures", async function () {

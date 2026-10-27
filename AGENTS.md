@@ -63,6 +63,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - Retries go back through the limiter. A 429 also calls `RateLimiter.pause()` for the backoff delay, so every queued caller waits, not just the one that got it.
 - `Zotero.HTTP.request` is called with `successCodes: false` and `errorDelayMax: 0`. Zotero's own retry loop would otherwise retry 429/5xx outside our rate limit.
 - Retry on 429, 500, 502, 503, 504, status 0 and thrown errors. Other 4xx responses fail immediately.
+- A `Retry-After` longer than the 60 s backoff cap (`MAX_DELAY_MS`) fails the call at once with an `S2Error`, without `pause()`. Honoring it would stall that call, and through the shared limiter every other one, for as long as S2 asks.
 - Prefer batch endpoints. One `paperBatch` per tool call where possible; `zotero_add_papers` resolves every id in a single request.
 
 **Tools**
