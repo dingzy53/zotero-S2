@@ -19,7 +19,7 @@ const DOI_RE = /\b(10\.\d{4,9}\/\S+)/;
 const ARXIV_NEW_RE = /^(\d{4}\.\d{4,5})(v\d+)?$/;
 const ARXIV_OLD_RE = /^([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(v\d+)?$/i;
 const S2_SHA_RE = /^[0-9a-f]{40}$/i;
-const S2_PREFIXES: Record<string, string> = {
+export const S2_PREFIXES: Record<string, string> = {
   pmid: "PMID",
   pmcid: "PMCID",
   mag: "MAG",

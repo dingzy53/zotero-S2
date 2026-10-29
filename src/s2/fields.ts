@@ -26,6 +26,17 @@ export const FULL_FIELDS = [
   "fieldsOfStudy",
 ].join(",");
 
+/** What the search window shows, dedupes on and exports. No tldr: one request per page. */
+export const GUI_FIELDS = [
+  SEARCH_FIELDS,
+  "corpusId",
+  "url",
+  "abstract",
+  "publicationDate",
+  "journal",
+  "fieldsOfStudy",
+].join(",");
+
 export const AUTHOR_FIELDS =
   "authorId,name,affiliations,paperCount,citationCount,hIndex";
 

@@ -33,5 +33,124 @@
     <html:link rel="localization" href="__addonRef__-search.ftl" />
   </linkset>
 
-  <html:div id="s2-root"></html:div>
+  <html:div id="s2-root">
+    <html:header class="s2-toolbar">
+      <html:div class="s2-modes" role="tablist">
+        <html:button data-mode="simple" data-l10n-id="search-mode-simple" />
+        <html:button data-mode="advanced" data-l10n-id="search-mode-advanced" />
+        <html:button data-mode="bulk" data-l10n-id="search-mode-bulk" />
+        <html:button data-mode="authors" data-l10n-id="search-mode-authors" />
+      </html:div>
+      <html:input id="s2-query" type="search" data-l10n-id="search-query" />
+      <html:button
+        id="s2-search"
+        class="s2-primary"
+        data-l10n-id="search-run"
+      />
+    </html:header>
+
+    <html:section id="s2-filters" hidden="hidden">
+      <html:div class="s2-filter-row">
+        <html:label data-l10n-id="search-filter-year"></html:label>
+        <html:input
+          id="s2-year-from"
+          class="s2-short"
+          inputmode="numeric"
+          data-l10n-id="search-filter-from"
+        />
+        <html:span>–</html:span>
+        <html:input
+          id="s2-year-to"
+          class="s2-short"
+          inputmode="numeric"
+          data-l10n-id="search-filter-to"
+        />
+        <html:label data-l10n-id="search-filter-date"></html:label>
+        <html:input
+          id="s2-date-from"
+          class="s2-date"
+          data-l10n-id="search-filter-date-from"
+        />
+        <html:span>–</html:span>
+        <html:input
+          id="s2-date-to"
+          class="s2-date"
+          data-l10n-id="search-filter-date-to"
+        />
+        <html:label data-l10n-id="search-filter-citations"></html:label>
+        <html:input
+          id="s2-min-citations"
+          class="s2-short"
+          inputmode="numeric"
+        />
+        <html:label class="s2-check">
+          <html:input id="s2-open-access" type="checkbox" />
+          <html:span data-l10n-id="search-filter-open-access"></html:span>
+        </html:label>
+      </html:div>
+      <html:div class="s2-filter-row">
+        <html:label
+          for="s2-venue"
+          data-l10n-id="search-filter-venue"
+        ></html:label>
+        <html:input id="s2-venue" data-l10n-id="search-filter-venue-input" />
+        <html:label
+          for="s2-sort"
+          class="s2-bulk-only"
+          data-l10n-id="search-sort"
+        ></html:label>
+        <menulist id="s2-sort" class="s2-bulk-only">
+          <menupopup>
+            <menuitem value="paperId:asc" data-l10n-id="search-sort-id" />
+            <menuitem
+              value="citationCount:desc"
+              data-l10n-id="search-sort-citations-desc"
+            />
+            <menuitem
+              value="citationCount:asc"
+              data-l10n-id="search-sort-citations-asc"
+            />
+            <menuitem
+              value="publicationDate:desc"
+              data-l10n-id="search-sort-date-desc"
+            />
+            <menuitem
+              value="publicationDate:asc"
+              data-l10n-id="search-sort-date-asc"
+            />
+          </menupopup>
+        </menulist>
+        <html:button id="s2-filters-reset" data-l10n-id="search-filter-reset" />
+      </html:div>
+      <html:details>
+        <html:summary data-l10n-id="search-filter-fields"></html:summary>
+        <html:div id="s2-fields-of-study" class="s2-check-grid"></html:div>
+      </html:details>
+      <html:details>
+        <html:summary data-l10n-id="search-filter-types"></html:summary>
+        <html:div id="s2-publication-types" class="s2-check-grid"></html:div>
+      </html:details>
+    </html:section>
+
+    <html:div id="s2-hint" class="s2-hint" hidden="hidden"></html:div>
+    <html:div id="s2-banner" class="s2-banner" hidden="hidden">
+      <html:span id="s2-banner-text"></html:span>
+      <html:button
+        id="s2-open-settings"
+        hidden="hidden"
+        data-l10n-id="search-open-settings"
+      />
+    </html:div>
+
+    <html:main id="s2-main">
+      <html:div id="s2-results" tabindex="0"></html:div>
+    </html:main>
+
+    <html:footer class="s2-statusbar">
+      <html:span id="s2-status"></html:span>
+      <html:span class="s2-spacer"></html:span>
+      <html:button id="s2-prev" data-l10n-id="search-prev" />
+      <html:button id="s2-next" data-l10n-id="search-next" />
+    </html:footer>
+  </html:div>
 </window>

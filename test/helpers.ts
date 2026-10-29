@@ -31,7 +31,9 @@ export function response(
 
 /**
  * S2 client backed by the fixtures: `/paper/batch` resolves DOI:, ARXIV:,
- * CorpusId: and paperId; everything else returns `fallback`.
+ * CorpusId: and paperId. Searches, author papers, citations, references and
+ * recommendations all return the fixture list (bulk search in two token
+ * pages); anything else is a 404.
  */
 export function fixtureClient(
   papers: S2Paper[] = FIXTURES,
@@ -62,6 +64,49 @@ export function fixtureClient(
         ? response(200, { data: [{ ...hit, matchScore: 99 }] })
         : response(404, { error: "Title match not found" });
     }
+    const params = new URL(url).searchParams;
+    const offset = Number(params.get("offset") ?? 0);
+    const limit = Number(params.get("limit") ?? 100);
+    const paged = (rows: unknown[]) => ({
+      total: rows.length,
+      offset,
+      ...(offset + limit < rows.length ? { next: offset + limit } : {}),
+      data: rows.slice(offset, offset + limit),
+    });
+    if (url.includes("/paper/search/bulk")) {
+      const half = Math.ceil(papers.length / 2);
+      return params.get("token") === "page2"
+        ? response(200, { total: papers.length, data: papers.slice(half) })
+        : response(200, {
+            total: papers.length,
+            token: "page2",
+            data: papers.slice(0, half),
+          });
+    }
+    if (url.includes("/paper/search")) return response(200, paged(papers));
+    if (url.includes("/author/search")) {
+      return response(
+        200,
+        paged([
+          {
+            authorId: "40348417",
+            name: "Ashish Vaswani",
+            affiliations: ["Google"],
+            paperCount: 60,
+            citationCount: 160000,
+            hIndex: 30,
+          },
+        ]),
+      );
+    }
+    if (/\/author\/[^/]+\/papers/.test(url))
+      return response(200, paged(papers));
+    if (/\/paper\/[^/]+\/citations/.test(url))
+      return response(200, paged(papers.map((p) => ({ citingPaper: p }))));
+    if (/\/paper\/[^/]+\/references/.test(url))
+      return response(200, paged(papers.map((p) => ({ citedPaper: p }))));
+    if (url.includes("/recommendations/"))
+      return response(200, { recommendedPapers: papers });
     return response(404, { error: "not in fixtures" });
   };
   return new S2Client({

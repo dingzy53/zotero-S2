@@ -4,6 +4,7 @@ import { createZToolkit } from "./utils/ztoolkit";
 import { guiDeps } from "./gui/deps";
 import {
   closeSearchWindows,
+  controllerFor,
   openSearchWindow,
   searchWindows,
 } from "./gui/searchWindow";
@@ -29,6 +30,7 @@ class Addon {
     openSearchWindow,
     closeSearchWindows,
     searchWindows,
+    controllerFor,
     guiDeps,
     getActivity: getEntries,
   };
