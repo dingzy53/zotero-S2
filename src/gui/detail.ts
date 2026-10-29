@@ -131,13 +131,11 @@ export function renderDetail(
   actions: PaperActions,
   itemKey: string | null | undefined,
   outcome: string | undefined,
+  emptyText = getString("gui-detail-empty"),
 ) {
   if (!p) {
     container.replaceChildren(
-      el(doc, "div", {
-        class: "s2-empty",
-        text: getString("gui-detail-empty"),
-      }),
+      el(doc, "div", { class: "s2-empty", text: emptyText }),
     );
     return;
   }

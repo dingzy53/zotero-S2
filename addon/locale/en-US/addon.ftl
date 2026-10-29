@@ -50,6 +50,7 @@ gui-related-references = References
 gui-related-recommendations = Similar papers
 gui-author-papers = Papers by { $name }
 gui-detail-empty = Select a paper to see its details.
+gui-detail-authors = Click an author to list their papers.
 gui-in-library = ✓ In library
 gui-no-abstract = Semantic Scholar has no abstract for this paper.
 gui-cards-more = Show more

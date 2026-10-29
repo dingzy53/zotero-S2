@@ -804,6 +804,9 @@ export class SearchController implements ViewHost, AddHost {
       this.actions,
       p && this.inLibrary(p),
       p ? this.outcome(p) : undefined,
+      getString(
+        this.current?.authors ? "gui-detail-authors" : "gui-detail-empty",
+      ),
     );
   }
 
