@@ -28,6 +28,7 @@ export type FluentMessageId =
   | 'gui-crumb-citations'
   | 'gui-crumb-recommendations'
   | 'gui-crumb-references'
+  | 'gui-detail-authors'
   | 'gui-detail-empty'
   | 'gui-error-citations'
   | 'gui-error-date-format'

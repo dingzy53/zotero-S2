@@ -2,6 +2,19 @@
 
 > Branch `feat/search-gui`. This file is also committed as `PLAN.md` at the repo root.
 
+## Status (2026-10-29)
+
+All eight steps are implemented on `feat/search-gui`, one commit each. `npm run build`, `npm run lint:check` and the Zotero test run pass after every step: the suite went from 88 to 122 tests.
+
+Where the build differs from this plan:
+
+- **Results table:** a plain HTML table, not `VirtualizedTableHelper`. A result set holds at most 1,000 rows, so it doesn't need virtualization. A plain table also leaves selection fully under our control: one `Set` that the table and card views share, with click, Ctrl/Cmd-click, Shift-click, arrow keys and Ctrl/Cmd+A. And it avoids React rendering that runs out of step with the tests.
+- **Search history:** a **Recent** menu button next to the query box, not a `<datalist>`, because datalist popups aren't reliable in chrome windows.
+- **Test hooks:** `addon.api` exposes `openSearchWindow`, `closeSearchWindows`, `searchWindows`, `controllerFor`, `guiDeps` and `getActivity`. The test bundle has its own copies of every module, so this is how it reaches the running plugin.
+- **Default target:** when the main window has a single library selected and there's no remembered target, the add bar starts on that library's root.
+
+Still to check by hand, since automated tests can't cover it: a real API key against live S2 (manual steps 1–8 below), and the save dialogs for BibTeX, RIS and CSV.
+
 ## Context
 
 Today, Zotero S2 is agent-only. MCP and REST endpoints let AI agents search

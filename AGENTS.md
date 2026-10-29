@@ -4,7 +4,7 @@ Guidance for coding agents working in this repo. User-facing docs live in `READM
 
 ## What this is
 
-A Zotero **10** plugin (TypeScript, built with `zotero-plugin-scaffold`). It lets AI agents search Semantic Scholar (S2) and add papers and PDFs to Zotero collections. It registers endpoints on Zotero's built-in local HTTP server (`127.0.0.1:23119`):
+A Zotero **10** plugin (TypeScript, built with `zotero-plugin-scaffold`). It lets AI agents search Semantic Scholar (S2) and add papers and PDFs to Zotero collections. People get the same through a search window (**Tools → Search Semantic Scholar…**). It registers endpoints on Zotero's built-in local HTTP server (`127.0.0.1:23119`):
 
 - `POST /s2/mcp`: an MCP server (Streamable HTTP, JSON responses only, no SSE).
 - `GET /s2/tools` and `POST /s2/tools/<name>`: a REST mirror of the same tools.
@@ -30,29 +30,37 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 
 ## Layout
 
-| Path                                                             | Role                                                                                                                                                                          |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/hooks.ts`                                                   | Lifecycle: startup registers the prefs pane, the token and the endpoints. Shutdown unregisters the endpoints. Hooks only dispatch.                                            |
-| `src/http/endpoints.ts`                                          | Registers `Zotero.Server.Endpoints`. Handles auth (bearer token, rejects `Origin`) and the enable pref. Owns the single `S2Client`.                                           |
-| `src/mcp/server.ts`                                              | Dual-era MCP JSON-RPC dispatcher. Pure and unit-tested.                                                                                                                       |
-| `src/mcp/tools.ts`                                               | **All tools**: name, description, JSON Schema, annotations, handler.                                                                                                          |
-| `src/mcp/schema.ts`                                              | Argument validation. Drops empty strings, rejects unknown args, fills defaults, enforces min/max/maxItems.                                                                    |
-| `src/mcp/runTool.ts`                                             | The only way tools run. Validates args, collects stats, writes the activity log, and never throws.                                                                            |
-| `src/s2/client.ts`                                               | S2 HTTP client: rate limiter, retries/backoff, endpoint wrappers.                                                                                                             |
-| `src/s2/rateLimiter.ts`                                          | `RateLimiter` (start-spacing FIFO) and `Semaphore` (PDF downloads, library writes). A freed `Semaphore` slot passes straight to the next waiter, so a newcomer can't slip in. |
-| `src/s2/fields.ts`                                               | Default `fields` strings and `compactPaper()`, the agent-facing paper shape.                                                                                                  |
-| `src/zotero/identifiers.ts`                                      | Parses any id form (DOI/arXiv/CorpusId/S2 sha/URLs) and normalizes ids.                                                                                                       |
-| `src/zotero/s2ToZotero.ts`                                       | Pure S2 → Zotero mapping (item type, fields, creators, Extra lines).                                                                                                          |
-| `src/zotero/importer.ts`                                         | Creates items (S2 mapping or Zotero translators), applies mapped fields, tags and notes.                                                                                      |
-| `src/zotero/dedupe.ts`                                           | Finds existing items (DOI → arXiv → S2 id → CorpusId → title + year). Item describers.                                                                                        |
-| `src/zotero/pdf.ts`                                              | **The only place PDFs are attached.** Order: S2 OA → arXiv → Zotero resolvers.                                                                                                |
-| `src/zotero/collections.ts`                                      | Resolves libraries and collections by key or `A/B/C` path, creating them if needed.                                                                                           |
-| `src/zotero/writeLock.ts`                                        | `libraryWrites`: serializes find-or-create so parallel tool calls don't duplicate collections or items.                                                                       |
-| `src/zotero/apis.ts`                                             | Typed shims for Zotero APIs that `zotero-types` lacks or mistypes.                                                                                                            |
-| `src/modules/preferences.ts` + `addon/content/preferences.xhtml` | Settings pane: API key, token, copy command, activity log.                                                                                                                    |
-| `src/log/activity.ts`                                            | Ring buffer of recent calls, shown in the prefs pane.                                                                                                                         |
-| `addon/locale/en-US/*.ftl`                                       | Fluent strings. Scaffold prefixes the IDs with `zoteros2-`, so write them unprefixed.                                                                                         |
-| `test/`                                                          | Mocha suites, `fixtures.ts` (hand-written S2 responses), and `helpers.ts` (fake clock, fixture S2 client). `http.test.ts` goes through Zotero's real server.                  |
+| Path                                                             | Role                                                                                                                                                                            |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/hooks.ts`                                                   | Lifecycle: startup registers the prefs pane, the token, the endpoints and the Tools menu item. Shutdown closes search windows and unregisters all of them. Hooks only dispatch. |
+| `src/http/endpoints.ts`                                          | Registers `Zotero.Server.Endpoints`. Handles auth (bearer token, rejects `Origin`) and the enable pref. Owns the single `S2Client`.                                             |
+| `src/mcp/server.ts`                                              | Dual-era MCP JSON-RPC dispatcher. Pure and unit-tested.                                                                                                                         |
+| `src/mcp/tools.ts`                                               | **All tools**: name, description, JSON Schema, annotations, handler.                                                                                                            |
+| `src/mcp/schema.ts`                                              | Argument validation. Drops empty strings, rejects unknown args, fills defaults, enforces min/max/maxItems.                                                                      |
+| `src/mcp/runTool.ts`                                             | The only way tools run. Validates args, collects stats, writes the activity log, and never throws.                                                                              |
+| `src/s2/client.ts`                                               | S2 HTTP client: rate limiter, retries/backoff, endpoint wrappers.                                                                                                               |
+| `src/s2/rateLimiter.ts`                                          | `RateLimiter` (start-spacing FIFO) and `Semaphore` (PDF downloads, library writes). A freed `Semaphore` slot passes straight to the next waiter, so a newcomer can't slip in.   |
+| `src/s2/fields.ts`                                               | Default `fields` strings and `compactPaper()`, the agent-facing paper shape.                                                                                                    |
+| `src/zotero/identifiers.ts`                                      | Parses any id form (DOI/arXiv/CorpusId/S2 sha/URLs) and normalizes ids.                                                                                                         |
+| `src/zotero/s2ToZotero.ts`                                       | Pure S2 → Zotero mapping (item type, fields, creators, Extra lines).                                                                                                            |
+| `src/zotero/importer.ts`                                         | Creates items (S2 mapping or Zotero translators), applies mapped fields, tags and notes.                                                                                        |
+| `src/zotero/dedupe.ts`                                           | Finds existing items (DOI → arXiv → S2 id → CorpusId → title + year). Item describers.                                                                                          |
+| `src/zotero/pdf.ts`                                              | **The only place PDFs are attached.** Order: S2 OA → arXiv → Zotero resolvers.                                                                                                  |
+| `src/zotero/collections.ts`                                      | Resolves libraries and collections by key or `A/B/C` path, creating them if needed.                                                                                             |
+| `src/zotero/writeLock.ts`                                        | `libraryWrites`: serializes find-or-create so parallel tool calls don't duplicate collections or items.                                                                         |
+| `src/zotero/apis.ts`                                             | Typed shims for Zotero APIs that `zotero-types` lacks or mistypes.                                                                                                              |
+| `src/modules/preferences.ts` + `addon/content/preferences.xhtml` | Settings pane: API key, token, copy command, activity log.                                                                                                                      |
+| `src/log/activity.ts`                                            | Ring buffer of recent calls, shown in the prefs pane.                                                                                                                           |
+| `src/gui/menu.ts`                                                | The Tools menu item, through `Zotero.MenuManager` (registered once at startup), plus the main-window FTL.                                                                       |
+| `src/gui/searchWindow.ts` + `addon/content/search.xhtml`         | Opens or focuses the single search window, creates its controller, and closes every search window on shutdown.                                                                  |
+| `src/gui/controller.ts`                                          | Search window controller: form, modes, requests, the result-set stack (related navigation), state and export.                                                                   |
+| `src/gui/model.ts`                                               | Pure: form → tool call, filter validation, id detection, hyphen rewriting, paging and client-side sort. Unit-tested.                                                            |
+| `src/gui/resultsTable.ts`, `resultsCards.ts`, `detail.ts`        | The two result views (plain DOM, one shared selection) and the detail pane with each paper's actions.                                                                           |
+| `src/gui/addBar.ts`                                              | Target picker, add options, the Add button (through `zotero_add_papers`) and the in-library badges.                                                                             |
+| `src/gui/export.ts`, `state.ts`                                  | Pure RIS/CSV/BibTeX serializers, and the remembered-state and history prefs (parsed defensively).                                                                               |
+| `src/gui/deps.ts`                                                | `callTool()`: the GUI's only route to S2 and to library writes. `guiDeps` is the test seam.                                                                                     |
+| `addon/locale/en-US/*.ftl`                                       | Fluent strings. Scaffold prefixes the IDs with `zoteros2-`, so write them unprefixed.                                                                                           |
+| `test/`                                                          | Mocha suites, `fixtures.ts` (hand-written S2 responses), and `helpers.ts` (fake clock, fixture S2 client). `http.test.ts` goes through Zotero's real server.                    |
 
 ## Invariants: keep these true
 
@@ -104,6 +112,16 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - Find-or-create runs under `libraryWrites` (`src/zotero/writeLock.ts`): `resolveCollection()` and each item in `zotero_add_papers` (find, create, tags, note). Agents call tools in parallel, and two calls that both miss would both create. The lock isn't reentrant, so never take it while holding it, and keep PDF downloads outside it.
 - Target `libraryID` and collections explicitly. Never read the UI selection. In Zotero 10 the singular selection getters throw.
 
+**Search window (`src/gui/`)**
+
+- The GUI reaches S2 and writes to the library **only through `callTool()`** (`runTool(…, "gui")`) with existing tools. It gets validation, the 25-item cap, `libraryWrites`, PDF handling and logging that way. Don't call `S2Client` methods from `src/gui`, and don't give the GUI its own client or limiter. The only direct library access is the read-only `findExisting` badge check.
+- Requests start only on an explicit Enter or click: no search-as-you-type, no prefetching, no per-row S2 calls. Every GUI request shares the agents' 1/s budget.
+- The GUI may read the main window's selection **with plural getters only** (`getSelectedCollections()` / `getSelectedLibraryIDs()`), and only to _preselect_ a default target. Tool handlers still never read it, and the add call always passes `library_id` and the collection explicitly.
+- The GUI ignores the `enable` pref, which gates only HTTP. It still needs the API key.
+- Bulk search requests `max_results: 1000`. Trimming a page would make its continuation token skip the trimmed rows.
+- Menus come only from `Zotero.MenuManager`. Its `l10nID` must carry the `zoteros2-` prefix in TS: the scaffold prefixes FTL files and xhtml `data-l10n-id`, not string literals. Strings the controller sets at runtime go in `addon.ftl` (via `getString`); static window labels go in `search.ftl`.
+- Paper links open the system browser (`Zotero.launchURL`). An element that does something in the window, such as an author name, must not also carry such a handler.
+
 ## Zotero 10 / toolchain gotchas (learned the hard way)
 
 - **zotero-types lags the real API.** For missing or wrong signatures (e.g. `Attachments.addFileFromURLs`, `getFileResolvers`, `RecognizeDocument`), add a shim to `src/zotero/apis.ts` rather than scattering `as any`. Check signatures against Zotero's source: `chrome/content/zotero/xpcom/*.js` on GitHub.
@@ -129,6 +147,8 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - Unit tests must stay **offline**:
   - S2 logic uses `fixtureClient()` / `fakeClock()` from `test/helpers.ts`.
   - The fake clock is fine for sequential timing. For anything concurrent, use real timers at a reduced scale, as in the "keeps request spacing across retries" test.
+- The test bundle has its own copy of every module. GUI tests reach the running plugin through `Zotero.ZoteroS2.api` (`openSearchWindow`, `controllerFor`, `guiDeps`, `getActivity`). Swap `guiDeps.s2` for a `fixtureClient()` and restore it afterwards.
+- GUI tests run on the user's desktop. Don't trigger `Zotero.launchURL`, the clipboard or file pickers from them. Test `exportText()` rather than copy or save. Delete any items a GUI test adds, because later suites expect the fixtures not to be in the library yet.
 - `test/http.test.ts` sends real requests to port 23129 with `Zotero.HTTP.request`. Extend it when you touch auth, status codes or headers.
 - Manual HTTP checks: keep a watch-mode run alive and `curl` `http://127.0.0.1:23129/s2/...` with `Authorization: Bearer test-token`.
 - To try a real MCP client, run `claude mcp add --scope local --transport http zs2-test http://127.0.0.1:23129/s2/mcp --header "Authorization: Bearer test-token"`. **Remove it afterwards** with `claude mcp remove zs2-test -s local`.
