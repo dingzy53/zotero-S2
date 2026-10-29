@@ -367,6 +367,35 @@ describe("zotero_enrich_items", function () {
   });
 });
 
+describe("fields override on recommendations and author papers", function () {
+  it("returns raw S2 papers only when fields is set", async function () {
+    const calls: string[] = [];
+    const compact = await runTool(
+      "s2_recommend",
+      { positive_ids: [ATTENTION.paperId] },
+      calls,
+    );
+    assert.notProperty(compact.papers[0], "externalIds");
+    assert.match(calls[0], /fields=paperId%2CexternalIds/);
+    const raw = await runTool(
+      "s2_recommend",
+      { positive_ids: [ATTENTION.paperId], fields: "title,abstract" },
+      calls,
+    );
+    assert.deepEqual(raw.papers[0].externalIds, ATTENTION.externalIds);
+    assert.match(calls[1], /fields=title%2Cabstract/);
+
+    const authorRaw = await runTool(
+      "s2_get_author_papers",
+      { author_id: "40348417", fields: "title" },
+      calls,
+    );
+    assert.equal(authorRaw.papers[0].paperId, ATTENTION.paperId);
+    assert.property(authorRaw.papers[0], "externalIds");
+    assert.match(calls[2], /\/author\/40348417\/papers\?.*fields=title/);
+  });
+});
+
 describe("tool annotations", function () {
   it("state destructiveHint on every write tool", function () {
     // MCP assumes destructive when a non-read-only tool leaves it out

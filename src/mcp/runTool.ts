@@ -13,7 +13,7 @@ export async function runTool(
   tool: ToolDef,
   rawArgs: unknown,
   s2: S2Client,
-  via: "mcp" | "rest",
+  via: "mcp" | "rest" | "gui",
 ): Promise<ToolOutcome> {
   const stats = newStats();
   const start = Date.now();

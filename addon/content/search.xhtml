@@ -1,0 +1,259 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero/skin/zotero.css" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero-platform/content/zotero.css"?>
+<?xml-stylesheet href="chrome://__addonRef__/content/search.css" type="text/css"?>
+<window
+  id="__addonRef__-search-window"
+  windowtype="__addonRef__:search"
+  xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  data-l10n-id="search-window"
+  persist="screenX screenY width height"
+  width="1100"
+  height="760"
+  onload="
+    Zotero.__addonInstance__?.hooks.onSearchWindowEvent('load', { window })
+  "
+  onunload="
+    Zotero.__addonInstance__?.hooks.onSearchWindowEvent('unload', { window })
+  "
+>
+  <script>
+    Services.scriptloader.loadSubScript(
+      "chrome://zotero/content/include.js",
+      this,
+    );
+    Services.scriptloader.loadSubScript(
+      "chrome://zotero/content/customElements.js",
+      this,
+    );
+  </script>
+  <linkset>
+    <html:link rel="localization" href="__addonRef__-search.ftl" />
+  </linkset>
+
+  <html:div id="s2-root">
+    <html:header class="s2-toolbar">
+      <html:div class="s2-modes" role="tablist">
+        <html:button data-mode="simple" data-l10n-id="search-mode-simple" />
+        <html:button data-mode="advanced" data-l10n-id="search-mode-advanced" />
+        <html:button data-mode="bulk" data-l10n-id="search-mode-bulk" />
+        <html:button data-mode="authors" data-l10n-id="search-mode-authors" />
+      </html:div>
+      <html:input id="s2-query" type="search" data-l10n-id="search-query" />
+      <button id="s2-history" type="menu" data-l10n-id="search-history">
+        <menupopup id="s2-history-popup" />
+      </button>
+      <html:button
+        id="s2-search"
+        class="s2-primary"
+        data-l10n-id="search-run"
+      />
+      <button id="s2-export" type="menu" data-l10n-id="search-export">
+        <menupopup id="s2-export-popup">
+          <menuitem
+            data-format="bibtex"
+            data-copy="true"
+            data-l10n-id="search-export-bibtex-copy"
+          />
+          <menuitem data-format="bibtex" data-l10n-id="search-export-bibtex" />
+          <menuitem data-format="ris" data-l10n-id="search-export-ris" />
+          <menuitem data-format="csv" data-l10n-id="search-export-csv" />
+        </menupopup>
+      </button>
+      <html:div class="s2-modes s2-views" role="radiogroup">
+        <html:button data-view="table" data-l10n-id="search-view-table" />
+        <html:button data-view="cards" data-l10n-id="search-view-cards" />
+      </html:div>
+    </html:header>
+
+    <html:section id="s2-filters" hidden="hidden">
+      <html:div class="s2-filter-row">
+        <html:label data-l10n-id="search-filter-year"></html:label>
+        <html:input
+          id="s2-year-from"
+          class="s2-short"
+          inputmode="numeric"
+          data-l10n-id="search-filter-from"
+        />
+        <html:span>–</html:span>
+        <html:input
+          id="s2-year-to"
+          class="s2-short"
+          inputmode="numeric"
+          data-l10n-id="search-filter-to"
+        />
+        <html:label data-l10n-id="search-filter-date"></html:label>
+        <html:input
+          id="s2-date-from"
+          class="s2-date"
+          data-l10n-id="search-filter-date-from"
+        />
+        <html:span>–</html:span>
+        <html:input
+          id="s2-date-to"
+          class="s2-date"
+          data-l10n-id="search-filter-date-to"
+        />
+        <html:label data-l10n-id="search-filter-citations"></html:label>
+        <html:input
+          id="s2-min-citations"
+          class="s2-short"
+          inputmode="numeric"
+        />
+        <html:label class="s2-check">
+          <html:input id="s2-open-access" type="checkbox" />
+          <html:span data-l10n-id="search-filter-open-access"></html:span>
+        </html:label>
+      </html:div>
+      <html:div class="s2-filter-row">
+        <html:label
+          for="s2-venue"
+          data-l10n-id="search-filter-venue"
+        ></html:label>
+        <html:input id="s2-venue" data-l10n-id="search-filter-venue-input" />
+        <html:label
+          for="s2-sort"
+          class="s2-bulk-only"
+          data-l10n-id="search-sort"
+        ></html:label>
+        <menulist id="s2-sort" class="s2-bulk-only">
+          <menupopup>
+            <menuitem value="paperId:asc" data-l10n-id="search-sort-id" />
+            <menuitem
+              value="citationCount:desc"
+              data-l10n-id="search-sort-citations-desc"
+            />
+            <menuitem
+              value="citationCount:asc"
+              data-l10n-id="search-sort-citations-asc"
+            />
+            <menuitem
+              value="publicationDate:desc"
+              data-l10n-id="search-sort-date-desc"
+            />
+            <menuitem
+              value="publicationDate:asc"
+              data-l10n-id="search-sort-date-asc"
+            />
+          </menupopup>
+        </menulist>
+        <html:button id="s2-filters-reset" data-l10n-id="search-filter-reset" />
+      </html:div>
+      <html:details class="s2-bulk-only" id="s2-syntax">
+        <html:summary data-l10n-id="search-syntax"></html:summary>
+        <html:table class="s2-syntax">
+          <html:tr>
+            <html:td><html:code>+word</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-and"></html:td>
+            <html:td><html:code>-word</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-not"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:td><html:code>a | b</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-or"></html:td>
+            <html:td><html:code>"exact phrase"</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-phrase"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:td><html:code>neur*</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-prefix"></html:td>
+            <html:td><html:code>( … )</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-group"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:td><html:code>word~2</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-fuzzy"></html:td>
+            <html:td><html:code>"a b"~3</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-slop"></html:td>
+          </html:tr>
+        </html:table>
+        <html:p>
+          <html:span data-l10n-id="search-syntax-example"></html:span>
+          <html:code
+            >((cloud computing) | virtualization) +security -privacy</html:code
+          >
+        </html:p>
+      </html:details>
+      <html:details>
+        <html:summary data-l10n-id="search-filter-fields"></html:summary>
+        <html:div id="s2-fields-of-study" class="s2-check-grid"></html:div>
+      </html:details>
+      <html:details>
+        <html:summary data-l10n-id="search-filter-types"></html:summary>
+        <html:div id="s2-publication-types" class="s2-check-grid"></html:div>
+      </html:details>
+    </html:section>
+
+    <html:div id="s2-hint" class="s2-hint" hidden="hidden"></html:div>
+    <html:div id="s2-banner" class="s2-banner" hidden="hidden">
+      <html:span id="s2-banner-text"></html:span>
+      <html:button
+        id="s2-open-settings"
+        hidden="hidden"
+        data-l10n-id="search-open-settings"
+      />
+    </html:div>
+
+    <html:nav id="s2-crumbs" class="s2-crumbs" hidden="hidden">
+      <html:button id="s2-back" data-l10n-id="search-back" />
+      <html:span id="s2-crumb-trail"></html:span>
+      <html:span class="s2-spacer"></html:span>
+      <html:span id="s2-pool-box" hidden="hidden">
+        <html:label data-l10n-id="search-pool"></html:label>
+        <menulist id="s2-pool">
+          <menupopup>
+            <menuitem value="recent" data-l10n-id="search-pool-recent" />
+            <menuitem value="all-cs" data-l10n-id="search-pool-all-cs" />
+          </menupopup>
+        </menulist>
+      </html:span>
+    </html:nav>
+
+    <html:main id="s2-main">
+      <html:div id="s2-results" tabindex="0"></html:div>
+      <html:aside id="s2-detail"></html:aside>
+    </html:main>
+
+    <html:footer id="s2-addbar" class="s2-addbar">
+      <html:label data-l10n-id="search-add-to"></html:label>
+      <menulist id="s2-library">
+        <menupopup />
+      </menulist>
+      <menulist id="s2-collection">
+        <menupopup />
+      </menulist>
+      <html:input
+        id="s2-new-collection"
+        hidden="hidden"
+        data-l10n-id="search-new-collection"
+      />
+      <html:input id="s2-tags" data-l10n-id="search-tags" />
+      <menulist id="s2-metadata">
+        <menupopup>
+          <menuitem value="s2" data-l10n-id="search-metadata-s2" />
+          <menuitem
+            value="translator"
+            data-l10n-id="search-metadata-translator"
+          />
+        </menupopup>
+      </menulist>
+      <html:label class="s2-check">
+        <html:input id="s2-attach-pdf" type="checkbox" checked="checked" />
+        <html:span data-l10n-id="search-attach-pdf"></html:span>
+      </html:label>
+      <html:span class="s2-spacer"></html:span>
+      <html:span id="s2-add-hint" class="s2-muted"></html:span>
+      <html:button id="s2-add" class="s2-primary" />
+    </html:footer>
+
+    <html:footer class="s2-statusbar">
+      <html:span id="s2-status"></html:span>
+      <html:span class="s2-spacer"></html:span>
+      <html:button id="s2-prev" data-l10n-id="search-prev" />
+      <html:button id="s2-next" data-l10n-id="search-next" />
+      <html:button id="s2-more" data-l10n-id="search-more" />
+    </html:footer>
+  </html:div>
+</window>

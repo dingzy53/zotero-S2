@@ -5,7 +5,7 @@
 [![Zotero 10](https://img.shields.io/badge/Zotero-10-cc2936)](https://www.zotero.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-A Zotero 10 plugin that lets AI agents search [Semantic Scholar](https://www.semanticscholar.org/product/api) and file papers, with PDFs, into your Zotero collections.
+A Zotero 10 plugin that lets AI agents, and you, search [Semantic Scholar](https://www.semanticscholar.org/product/api) and file papers, with PDFs, into your Zotero collections.
 
 The plugin serves an **MCP endpoint from inside Zotero**, on Zotero's own local server, so there is no separate process to run. The same tools are also available as plain REST endpoints for scripts and `curl`.
 
@@ -13,6 +13,7 @@ The plugin serves an **MCP endpoint from inside Zotero**, on Zotero's own local 
 - **File papers:** add up to 25 papers per call to a collection, given by key or by slash path (`Project/Reading`). Missing collections are created. Papers already in your library are matched by DOI, arXiv id, S2 id or title + year, then reused rather than duplicated.
 - **Attach PDFs:** sources are tried in order: the S2 open-access PDF, then arXiv, then Zotero's own "Find Available PDF" resolvers. Zotero rejects anything that isn't really a PDF.
 - **Fill in metadata:** enrich existing items with abstracts, dates, venues, DOIs and authors from Semantic Scholar.
+- **A search window for people:** **Tools → Search Semantic Scholar…** offers simple, advanced and boolean search, authors, citations and recommendations, and adds what you pick straight into a collection.
 - **Polite to Semantic Scholar:** keyed requests only, at most 1 per second across all callers, with exponential backoff.
 
 ## Requirements
@@ -55,6 +56,23 @@ Any MCP client that supports Streamable HTTP can connect the same way. A typical
 The server speaks both the stateless MCP 2026-07-28 protocol and the `initialize`-based 2025-03-26 … 2025-11-25 revisions. Responses are plain JSON: there is no SSE and no session.
 
 Then just ask, for example: _"Find the most-cited papers on retrieval-augmented generation since 2023 and add the top ten to Reading/RAG with PDFs."_
+
+## Search window
+
+Open **Tools → Search Semantic Scholar…** (or **Open search window** in settings). The window uses your API key and the same request queue as agents. It works even when the agent server is switched off.
+
+**Modes**
+
+- **Simple:** type keywords or a title. Paste a DOI, arXiv id, `CorpusId:…`, `PMID:…`, S2 id or a doi.org/arxiv.org link and the window looks up that paper instead. Semantic Scholar's relevance search matches nothing for hyphenated words, so hyphens become spaces (a note says so).
+- **Advanced:** relevance search with filters: year range or exact dates, venues, fields of study, publication types, minimum citations and open-access PDF only. Relevance search stops at 1,000 results.
+- **Boolean:** S2's bulk search, with sorting by citations or date, up to 1,000 papers per page and **Load more** for the next page. Syntax: `+must` `-not` `a | b` `"exact phrase"` `prefix*` `( grouping )` `word~2` `"a b"~3`, for example `((cloud computing) | virtualization) +security -privacy`.
+- **Authors:** find an author, then click them to list their papers.
+
+**Results** show as a **table with a detail pane** (sortable columns; Ctrl/Cmd-click and Shift-click to select several) or as **cards** with abstracts. Choose in the window or in settings. Papers already in the target library get a ✓. From any paper you can open its **Citations**, **References** or **Similar papers**. A breadcrumb and **Back** return to where you were without new requests.
+
+**Adding.** Pick a library and collection (it starts on the collection selected in Zotero's main window), or choose **New collection…** and type a path like `Reading/2026`. Optional: tags, the metadata source (S2, or Zotero's DOI/arXiv translators) and **Attach PDF**. Up to 25 papers per add, the same limit agents have. Papers already in your library are reused, not duplicated.
+
+**Export** the selected papers, or all loaded ones if none are selected, as BibTeX (copy or save), RIS or CSV. **Recent** reruns one of your last 20 searches, and the window reopens with your last search and options. Its calls show up in the activity table as `gui`.
 
 ## Tools
 

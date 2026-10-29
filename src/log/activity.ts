@@ -1,6 +1,6 @@
 export interface ActivityEntry {
   time: number;
-  via: "mcp" | "rest" | "prefs";
+  via: "mcp" | "rest" | "prefs" | "gui";
   tool: string;
   args: string;
   durationMs: number;

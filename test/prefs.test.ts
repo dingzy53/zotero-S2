@@ -57,5 +57,19 @@ describe("settings pane", function () {
 
     // Restore the fixed test token used by the HTTP checks
     Zotero.Prefs.set(`${prefix}mcpToken`, saved, true);
+
+    // Search window settings: the page size stays an int pref
+    const pageSize = doc.getElementById(id("page-size")) as any;
+    assert.equal(pageSize.value, "25");
+    pageSize.value = "50";
+    pageSize.dispatchEvent(
+      new (win!.document.defaultView as any).Event("command"),
+    );
+    assert.strictEqual(Zotero.Prefs.get(`${prefix}gui.pageSize`, true), 50);
+    Zotero.Prefs.set(`${prefix}gui.pageSize`, 25, true);
+    assert.equal(
+      (doc.getElementById(id("view")) as any).value,
+      Zotero.Prefs.get(`${prefix}resultsView`, true),
+    );
   });
 });

@@ -34,6 +34,42 @@
   </groupbox>
 
   <groupbox>
+    <label><html:h2 data-l10n-id="pref-gui-title"></html:h2></label>
+    <hbox align="center">
+      <html:label data-l10n-id="pref-gui-view"></html:label>
+      <radiogroup
+        id="zotero-prefpane-__addonRef__-view"
+        orient="horizontal"
+        preference="resultsView"
+      >
+        <radio value="table" data-l10n-id="pref-gui-view-table" />
+        <radio value="cards" data-l10n-id="pref-gui-view-cards" />
+      </radiogroup>
+    </hbox>
+    <hbox align="center">
+      <html:label data-l10n-id="pref-gui-page-size"></html:label>
+      <menulist id="zotero-prefpane-__addonRef__-page-size">
+        <menupopup>
+          <menuitem value="25" label="25" />
+          <menuitem value="50" label="50" />
+          <menuitem value="100" label="100" />
+        </menupopup>
+      </menulist>
+    </hbox>
+    <hbox align="center">
+      <button
+        id="zotero-prefpane-__addonRef__-open-search"
+        data-l10n-id="pref-gui-open"
+      />
+      <button
+        id="zotero-prefpane-__addonRef__-clear-history"
+        data-l10n-id="pref-gui-clear-history"
+      />
+    </hbox>
+    <html:p data-l10n-id="pref-gui-help" style="opacity: 0.7"></html:p>
+  </groupbox>
+
+  <groupbox>
     <label><html:h2 data-l10n-id="pref-mcp-title"></html:h2></label>
     <hbox align="center">
       <html:label data-l10n-id="pref-endpoint"></html:label>
