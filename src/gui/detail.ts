@@ -107,15 +107,15 @@ export function authorsList(
     authors.flatMap((a, i) => {
       const sep = i < authors.length - 1 ? ", " : "";
       if (!a.authorId || !actions.author) return [`${a.name}${sep}`];
-      const name = link(
-        doc,
-        a.name,
-        `https://www.semanticscholar.org/author/${a.authorId}`,
-      );
-      name.title = getString("gui-author-papers", { args: { name: a.name } });
+      // No href: a click lists the author's papers here, not in a browser
+      const name = el(doc, "a", {
+        class: "s2-link",
+        text: a.name,
+        title: getString("gui-author-papers", { args: { name: a.name } }),
+      });
       name.addEventListener("click", (e) => {
         e.preventDefault();
-        e.stopImmediatePropagation();
+        e.stopPropagation();
         actions.author!(a.authorId!, a.name);
       });
       return [name, sep];

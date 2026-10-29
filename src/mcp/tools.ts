@@ -406,6 +406,7 @@ export const TOOLS: ToolDef[] = [
           default: "recent",
           description: "Candidate pool (single-paper mode only).",
         },
+        fields: fieldsOverride,
       },
       required: ["positive_ids"],
     },
@@ -417,16 +418,22 @@ export const TOOLS: ToolDef[] = [
       const neg = ((args.negative_ids as string[]) ?? []).map(
         (id) => parseIdentifier(id).s2Query,
       );
+      // A `fields: undefined` would override the client's default fields
+      const fields = args.fields ? { fields: args.fields } : {};
       const res =
         pos.length === 1 && !neg.length
           ? await ctx.s2.recommendForPaper(ctx.stats, pos[0], {
               limit: args.limit,
               from: args.pool,
+              ...fields,
             })
           : await ctx.s2.recommendFromLists(ctx.stats, pos, neg, {
               limit: args.limit,
+              ...fields,
             });
-      return { papers: papersOut(res.recommendedPapers ?? [], false) };
+      return {
+        papers: papersOut(res.recommendedPapers ?? [], !!args.fields),
+      };
     },
   },
   {
@@ -463,6 +470,7 @@ export const TOOLS: ToolDef[] = [
         author_id: { type: "string" },
         limit: { type: "integer", minimum: 1, maximum: 1000, default: 20 },
         offset: { type: "integer", minimum: 0, default: 0 },
+        fields: fieldsOverride,
       },
       required: ["author_id"],
     },
@@ -471,11 +479,12 @@ export const TOOLS: ToolDef[] = [
       const res = await ctx.s2.authorPapers(ctx.stats, args.author_id, {
         limit: args.limit,
         offset: args.offset,
+        ...(args.fields ? { fields: args.fields } : {}),
       });
       return {
         offset: res.offset,
         next: res.next,
-        papers: papersOut(res.data ?? [], false),
+        papers: papersOut(res.data ?? [], !!args.fields),
       };
     },
   },

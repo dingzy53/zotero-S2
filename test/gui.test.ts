@@ -242,6 +242,94 @@ describe("search window: searching", function () {
   });
 });
 
+describe("search window: related and authors", function () {
+  this.timeout(30_000);
+  let restore: any;
+
+  before(function () {
+    restore = api().guiDeps.s2;
+  });
+
+  afterEach(async function () {
+    api().closeSearchWindows();
+    await waitFor(() => api().searchWindows().length === 0, "windows closed");
+    api().guiDeps.s2 = restore;
+  });
+
+  const button = (root: Element, text: string) =>
+    [...root.querySelectorAll("button")].find(
+      (b) => b.textContent === text,
+    ) as HTMLButtonElement;
+
+  it("drills into citations and comes back without calling S2", async function () {
+    const calls: string[] = [];
+    const { doc, ctl } = await openWindow(calls);
+    Zotero.Prefs.set(`${config.prefsPrefix}.resultsView`, "table", true);
+    setQuery(doc, "attention");
+    await ctl.search();
+    rows(doc)[1].dispatchEvent(
+      new (doc.defaultView as any).MouseEvent("mousedown", { bubbles: true }),
+    );
+    const focused = ctl.focused;
+    button(doc.getElementById("s2-detail")!, "Citations").click();
+    await waitFor(() => ctl.stack.length === 2 && !ctl.busy, "citations");
+    assert.match(calls[1], /\/paper\/[0-9a-f]+\/citations\?.*fields=/);
+    assert.isFalse(doc.getElementById("s2-crumbs")!.hidden);
+    assert.include(
+      doc.getElementById("s2-crumb-trail")!.textContent,
+      "Citations of",
+    );
+    assert.lengthOf(rows(doc), FIXTURES.length);
+    assert.equal(ctl.selection.size, 0);
+
+    (doc.getElementById("s2-back") as HTMLButtonElement).click();
+    assert.lengthOf(ctl.stack, 1);
+    assert.equal(ctl.focused, focused);
+    assert.isTrue(doc.getElementById("s2-crumbs")!.hidden);
+    assert.lengthOf(calls, 2);
+  });
+
+  it("lists similar papers and switches the candidate pool", async function () {
+    const calls: string[] = [];
+    const { doc, ctl } = await openWindow(calls);
+    setQuery(doc, "attention");
+    await ctl.search();
+    await ctl.related(ctl.current.papers[0], "recommendations");
+    assert.match(calls[1], /forpaper\/.*from=recent/);
+    assert.isFalse(doc.getElementById("s2-pool-box")!.hidden);
+    await ctl.setPool("all-cs");
+    assert.match(calls[2], /from=all-cs/);
+    assert.lengthOf(ctl.stack, 2);
+    assert.lengthOf(rows(doc), FIXTURES.length);
+  });
+
+  it("searches authors and opens an author's papers", async function () {
+    const calls: string[] = [];
+    const { doc, ctl } = await openWindow(calls);
+    ctl.setMode("authors");
+    setQuery(doc, "Ashish Vaswani");
+    await ctl.search();
+    assert.match(calls[0], /\/author\/search\?/);
+    const row = doc.querySelector(".s2-author-row") as HTMLElement;
+    assert.include(row.textContent, "Google");
+    row.click();
+    await waitFor(() => ctl.stack.length === 2 && !ctl.busy, "author papers");
+    assert.match(calls[1], /\/author\/40348417\/papers\?/);
+    assert.include(
+      doc.getElementById("s2-crumb-trail")!.textContent,
+      "Papers by Ashish Vaswani",
+    );
+    assert.lengthOf(rows(doc), FIXTURES.length);
+    // Author names in the detail pane open the same list
+    rows(doc)[0].dispatchEvent(
+      new (doc.defaultView as any).MouseEvent("mousedown", { bubbles: true }),
+    );
+    const name = doc.querySelector("#s2-detail .s2-authors a") as HTMLElement;
+    name.click();
+    await waitFor(() => ctl.stack.length === 3 && !ctl.busy, "nested author");
+  });
+});
+
 describe("search window: adding", function () {
   this.timeout(60_000);
   let ROOT: string;

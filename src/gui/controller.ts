@@ -1,6 +1,7 @@
 import { config } from "../../package.json";
 import { FluentMessageId } from "../../typings/i10n";
 import { getPrefsPaneID } from "../modules/preferences";
+import { GUI_FIELDS } from "../s2/fields";
 import type { S2Paper } from "../s2/types";
 import { getString } from "../utils/locale";
 import { getPref, setPref } from "../utils/prefs";
@@ -13,9 +14,11 @@ import {
   Mode,
   PUBLICATION_TYPES,
   Paging,
+  S2AuthorRow,
   RELEVANCE_CAP,
   SearchForm,
   ToolRequest,
+  authorsFromResult,
   canNext,
   canPrev,
   emptyFilters,
@@ -26,7 +29,7 @@ import {
   planSearch,
 } from "./model";
 import { AddBar, AddHost, LibraryBadges, defaultTarget } from "./addBar";
-import { PaperActions, renderDetail } from "./detail";
+import { PaperActions, RelatedKind, renderDetail } from "./detail";
 import { ResultsCards } from "./resultsCards";
 import { ResultsTable } from "./resultsTable";
 import type { ResultsView, ViewHost } from "./view";
@@ -37,6 +40,8 @@ export interface ResultSet {
   request: ToolRequest;
   paging: Paging;
   papers: S2Paper[];
+  /** Author search results; a set has either papers or authors. */
+  authors?: S2AuthorRow[];
   selection: Set<string>;
   focused: string | null;
   scrollTop: number;
@@ -58,6 +63,8 @@ export class SearchController implements ViewHost, AddHost {
   private prefObserver: symbol;
   readonly actions: PaperActions = {
     showInZotero: (p) => this.showInZotero(p),
+    related: (p, kind) => this.related(p, kind),
+    author: (id, name) => this.authorPapers(id, name),
   };
   readonly addBar: AddBar;
   private badges = new LibraryBadges(() => this.refreshMarks());
@@ -213,6 +220,10 @@ export class SearchController implements ViewHost, AddHost {
     this.$("prev").addEventListener("click", () => this.page("prev"));
     this.$("next").addEventListener("click", () => this.page("next"));
     this.$("more").addEventListener("click", () => this.page("next"));
+    this.$("back").addEventListener("click", () => this.goBack());
+    this.$("pool").addEventListener("command", () =>
+      this.setPool((this.$("pool") as any).value),
+    );
     this.$("open-settings").addEventListener("click", () =>
       Zotero.Utilities.Internal.openPreferences(getPrefsPaneID() ?? ""),
     );
@@ -378,10 +389,20 @@ export class SearchController implements ViewHost, AddHost {
       opts.page?.limit ?? request.args.limit ?? request.args.max_results ?? 0,
     );
     const papers = papersFromResult(request.tool, outcome.value);
-    const paging = pagingFromResult(request.tool, outcome.value, limit);
+    const authors =
+      request.tool === "s2_search_authors"
+        ? authorsFromResult(outcome.value)
+        : undefined;
+    const paging = pagingFromResult(
+      request.tool,
+      outcome.value,
+      limit,
+      Number(opts.page?.offset ?? request.args.offset ?? 0),
+    );
     const current = this.current;
     if ((opts.page || opts.append) && current) {
       current.papers = opts.append ? [...current.papers, ...papers] : papers;
+      current.authors = authors;
       current.paging = paging;
       if (!opts.append) {
         current.selection.clear();
@@ -393,6 +414,7 @@ export class SearchController implements ViewHost, AddHost {
         request,
         paging,
         papers,
+        authors,
         selection: new Set(),
         focused: null,
         scrollTop: 0,
@@ -407,6 +429,74 @@ export class SearchController implements ViewHost, AddHost {
     this.renderAll();
     if (!opts.append) this.$("results").scrollTop = 0;
     return true;
+  }
+
+  private pageSize(): number {
+    return Number(getPref("gui.pageSize")) || 25;
+  }
+
+  /** Citations, references or recommendations of a paper, as a new level. */
+  related(p: S2Paper, kind: RelatedKind) {
+    if (this.busy) return;
+    const title = p.title ?? p.paperId;
+    const request: ToolRequest =
+      kind === "recommendations"
+        ? {
+            tool: "s2_recommend",
+            args: {
+              positive_ids: [p.paperId],
+              limit: 100,
+              pool: "recent",
+              fields: GUI_FIELDS,
+            },
+          }
+        : {
+            tool:
+              kind === "citations" ? "s2_get_citations" : "s2_get_references",
+            args: {
+              paper_id: p.paperId,
+              limit: this.pageSize(),
+              offset: 0,
+              fields: GUI_FIELDS,
+            },
+          };
+    return this.load(request, {
+      push: true,
+      label: getString(`gui-crumb-${kind}`, { args: { title: short(title) } }),
+    });
+  }
+
+  /** An author's papers, as a new level (or the first, from author search). */
+  authorPapers(authorId: string, name: string) {
+    if (this.busy) return;
+    return this.load(
+      {
+        tool: "s2_get_author_papers",
+        args: {
+          author_id: authorId,
+          limit: this.pageSize(),
+          offset: 0,
+          fields: GUI_FIELDS,
+        },
+      },
+      { push: true, label: getString("gui-author-papers", { args: { name } }) },
+    );
+  }
+
+  /** Back to an earlier level, without calling S2 again. */
+  goBack(level = this.stack.length - 2) {
+    if (this.busy || level < 0 || level >= this.stack.length - 1) return;
+    this.stack.length = level + 1;
+    this.renderAll();
+    this.$("results").scrollTop = this.current!.scrollTop;
+  }
+
+  async setPool(pool: string) {
+    const current = this.current;
+    if (!current || current.request.tool !== "s2_recommend" || this.busy)
+      return;
+    current.request.args.pool = pool;
+    await this.load(current.request, { page: {} });
   }
 
   async page(dir: "next" | "prev") {
@@ -425,7 +515,11 @@ export class SearchController implements ViewHost, AddHost {
   renderAll() {
     const current = this.current;
     const results = this.$("results");
-    if (!current) {
+    this.renderCrumbs();
+    if (current?.authors) {
+      this.view.render([]);
+      this.renderAuthors(current.authors);
+    } else if (!current) {
       this.view.render([]);
       results.replaceChildren(
         el(this.doc, "div", {
@@ -448,6 +542,92 @@ export class SearchController implements ViewHost, AddHost {
     this.renderStatus();
     this.renderDetail();
     this.addBar?.render();
+  }
+
+  private renderCrumbs() {
+    const crumbs = this.$("crumbs");
+    crumbs.hidden = this.stack.length < 2;
+    const trail = this.$("crumb-trail");
+    trail.replaceChildren();
+    this.stack.forEach((set, i) => {
+      if (i) trail.append(" › ");
+      const last = i === this.stack.length - 1;
+      const label = set.label || "…";
+      if (last) {
+        trail.append(el(this.doc, "strong", { text: label }));
+      } else {
+        const a = el(this.doc, "a", { class: "s2-link", text: label });
+        a.addEventListener("click", () => this.goBack(i));
+        trail.append(a);
+      }
+    });
+    const isRecs = this.current?.request.tool === "s2_recommend";
+    this.$("pool-box").hidden = !isRecs;
+    if (isRecs)
+      (this.$("pool") as any).value =
+        this.current!.request.args.pool ?? "recent";
+  }
+
+  private renderAuthors(authors: S2AuthorRow[]) {
+    const doc = this.doc;
+    if (!authors.length) {
+      this.$("results").replaceChildren(
+        el(doc, "div", {
+          class: "s2-empty",
+          text: getString("gui-status-none"),
+        }),
+      );
+      return;
+    }
+    const head = el(doc, "tr", {}, [
+      el(doc, "th", {
+        class: "s2-col-title",
+        text: getString("gui-col-author"),
+      }),
+      el(doc, "th", { text: getString("gui-col-affiliations") }),
+      el(doc, "th", {
+        class: "s2-col-citations",
+        text: getString("gui-col-papers"),
+      }),
+      el(doc, "th", {
+        class: "s2-col-citations",
+        text: getString("gui-col-citations"),
+      }),
+      el(doc, "th", {
+        class: "s2-col-year",
+        text: getString("gui-col-hindex"),
+      }),
+    ]);
+    const body = el(doc, "tbody");
+    for (const a of authors) {
+      const tr = el(
+        doc,
+        "tr",
+        { class: "s2-author-row", "data-id": a.authorId },
+        [
+          el(doc, "td", { class: "s2-col-title", text: a.name }),
+          el(doc, "td", { text: (a.affiliations ?? []).join("; ") }),
+          el(doc, "td", {
+            class: "s2-col-citations",
+            text: a.paperCount?.toLocaleString() ?? "",
+          }),
+          el(doc, "td", {
+            class: "s2-col-citations",
+            text: a.citationCount?.toLocaleString() ?? "",
+          }),
+          el(doc, "td", { class: "s2-col-year", text: String(a.hIndex ?? "") }),
+        ],
+      );
+      tr.title = getString("gui-author-papers", { args: { name: a.name } });
+      tr.addEventListener("click", () => this.authorPapers(a.authorId, a.name));
+      body.append(tr);
+    }
+    this.$("results").replaceChildren(
+      el(doc, "table", { class: "s2-table s2-authors-table" }, [
+        el(doc, "thead", {}, [head]),
+        body,
+      ]),
+    );
   }
 
   focusedPaper(): S2Paper | null {
@@ -485,7 +665,7 @@ export class SearchController implements ViewHost, AddHost {
       this.setStatus(getString("gui-status-ready"));
       return;
     }
-    const count = current.papers.length;
+    const count = current.authors?.length ?? current.papers.length;
     let text: string;
     if (paging.kind === "offset" && paging.total !== undefined && count) {
       const { first, last } = pageRange(paging, count);
@@ -534,4 +714,8 @@ export class SearchController implements ViewHost, AddHost {
     hint.hidden = !message;
     hint.textContent = message ?? "";
   }
+}
+
+function short(title: string, max = 60): string {
+  return title.length > max ? `${title.slice(0, max - 1)}…` : title;
 }

@@ -419,3 +419,26 @@
 #s2-results:focus-within .s2-table tr[aria-selected="true"] .s2-badge {
   color: inherit;
 }
+
+.s2-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: var(--material-panedivider);
+  background: var(--material-toolbar);
+}
+
+#s2-pool-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.s2-author-row {
+  cursor: pointer;
+}
+
+.s2-author-row:hover {
+  background: var(--fill-quinary) !important;
+}

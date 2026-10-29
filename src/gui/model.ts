@@ -358,7 +358,10 @@ export function pagingFromResult(
   tool: string,
   value: any,
   limit: number,
+  requestOffset = 0,
 ): Paging {
+  // Author search answers without an offset; the request's is the same
+  value = { offset: requestOffset, ...value };
   switch (tool) {
     case "s2_search_papers":
       return offsetPaging(value, limit, RELEVANCE_CAP);
@@ -372,10 +375,23 @@ export function pagingFromResult(
     case "s2_get_author_papers":
     case "s2_get_citations":
     case "s2_get_references":
-      return offsetPaging(value ?? {}, limit);
+      return offsetPaging(value, limit);
     default:
       return { kind: "none" };
   }
+}
+
+export interface S2AuthorRow {
+  authorId: string;
+  name: string;
+  affiliations?: string[];
+  paperCount?: number;
+  citationCount?: number;
+  hIndex?: number;
+}
+
+export function authorsFromResult(value: any): S2AuthorRow[] {
+  return (value?.authors ?? []).filter((a: any) => a?.authorId);
 }
 
 // --- display helpers ---

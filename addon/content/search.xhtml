@@ -181,6 +181,21 @@
       />
     </html:div>
 
+    <html:nav id="s2-crumbs" class="s2-crumbs" hidden="hidden">
+      <html:button id="s2-back" data-l10n-id="search-back" />
+      <html:span id="s2-crumb-trail"></html:span>
+      <html:span class="s2-spacer"></html:span>
+      <html:span id="s2-pool-box" hidden="hidden">
+        <html:label data-l10n-id="search-pool"></html:label>
+        <menulist id="s2-pool">
+          <menupopup>
+            <menuitem value="recent" data-l10n-id="search-pool-recent" />
+            <menuitem value="all-cs" data-l10n-id="search-pool-all-cs" />
+          </menupopup>
+        </menulist>
+      </html:span>
+    </html:nav>
+
     <html:main id="s2-main">
       <html:div id="s2-results" tabindex="0"></html:div>
       <html:aside id="s2-detail"></html:aside>
