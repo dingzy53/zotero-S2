@@ -56,3 +56,18 @@ gui-card-select =
     .title = Select
 gui-abstract-more = more
 gui-abstract-less = less
+gui-library-root = Whole library (no collection)
+gui-new-collection = New collection…
+gui-add-button = { $count ->
+    [0] Add to Zotero
+    [one] Add 1 paper
+   *[other] Add { $count } papers
+}
+gui-add-too-many = Select at most { $max } papers per add.
+gui-adding = Adding { $count } papers… PDF downloads can take a while.
+gui-add-summary = { $added } added, { $existing } already in library, { $failed } failed · { $pdfs } PDFs attached
+gui-add-new-collection-empty = Enter a path for the new collection.
+gui-outcome-added = Added
+gui-outcome-existing = Already in library
+gui-outcome-failed = Failed: { $error }
+gui-outcome-pdf = PDF: { $status }

@@ -25,6 +25,7 @@ import {
   papersFromResult,
   planSearch,
 } from "./model";
+import { AddBar, AddHost, LibraryBadges, defaultTarget } from "./addBar";
 import { PaperActions, renderDetail } from "./detail";
 import { ResultsCards } from "./resultsCards";
 import { ResultsTable } from "./resultsTable";
@@ -45,7 +46,7 @@ const WAITING_AFTER_MS = 1500;
 
 export type ViewKind = "table" | "cards";
 
-export class SearchController implements ViewHost {
+export class SearchController implements ViewHost, AddHost {
   readonly doc: Document;
   mode: Mode = "simple";
   stack: ResultSet[] = [];
@@ -55,12 +56,19 @@ export class SearchController implements ViewHost {
   private view!: ResultsView;
   private noSelection = new Set<string>();
   private prefObserver: symbol;
-  readonly actions: PaperActions = {};
+  readonly actions: PaperActions = {
+    showInZotero: (p) => this.showInZotero(p),
+  };
+  readonly addBar: AddBar;
+  private badges = new LibraryBadges(() => this.refreshMarks());
+  private outcomes = new Map<string, string>();
 
   constructor(readonly win: Window) {
     this.doc = win.document;
     this.buildFilterGrids();
     this.bind();
+    this.addBar = new AddBar(this);
+    this.addBar.setTarget(defaultTarget(null));
     this.setMode("simple");
     this.setView(getPref("resultsView") === "cards" ? "cards" : "table");
     this.prefObserver = Zotero.Prefs.registerObserver(
@@ -117,17 +125,60 @@ export class SearchController implements ViewHost {
     if (this.current) this.current.focused = id;
   }
 
-  inLibrary(_paper: S2Paper): string | null | undefined {
-    return undefined;
+  inLibrary(paper: S2Paper): string | null | undefined {
+    return this.badges.get(this.addBar.libraryID, paper);
   }
 
-  outcome(_paper: S2Paper): string | undefined {
-    return undefined;
+  outcome(paper: S2Paper): string | undefined {
+    return this.outcomes.get(paper.paperId);
   }
 
   onSelectionChange() {
     this.renderStatus();
     this.renderDetail();
+    this.addBar.render();
+  }
+
+  // --- AddHost ---
+
+  selectedPapers(): S2Paper[] {
+    const current = this.current;
+    if (!current) return [];
+    return current.papers.filter((p) => current.selection.has(p.paperId));
+  }
+
+  setOutcome(paperId: string, text: string) {
+    this.outcomes.set(paperId, text);
+  }
+
+  afterAdd() {
+    this.badges.clear();
+    this.checkBadges();
+  }
+
+  targetChanged() {
+    this.refreshMarks();
+    this.checkBadges();
+  }
+
+  private checkBadges() {
+    const current = this.current;
+    if (current) this.badges.check(this.addBar.libraryID, current.papers);
+  }
+
+  private refreshMarks() {
+    this.view.refresh();
+    this.renderDetail();
+  }
+
+  private showInZotero(p: S2Paper) {
+    const key = this.inLibrary(p);
+    if (!key) return;
+    const item = Zotero.Items.getByLibraryAndKey(this.addBar.libraryID, key);
+    if (!item) return;
+    const win = Zotero.getMainWindow();
+    (Zotero.getActiveZoteroPane() as any)?.selectItem(item.id);
+    win?.focus();
   }
 
   onOpen(paper: S2Paper) {
@@ -283,7 +334,7 @@ export class SearchController implements ViewHost {
       this.focused = this.current.papers[0].paperId;
       this.current.selection.add(this.focused);
       this.view.refresh();
-      this.renderDetail();
+      this.onSelectionChange();
       this.showHint(getString("gui-hint-lookup"));
     } else if (plan.rewritten) {
       this.showHint(getString("gui-hint-hyphens"));
@@ -392,9 +443,11 @@ export class SearchController implements ViewHost {
       );
     } else {
       this.view.render(current.papers);
+      this.checkBadges();
     }
     this.renderStatus();
     this.renderDetail();
+    this.addBar?.render();
   }
 
   focusedPaper(): S2Paper | null {

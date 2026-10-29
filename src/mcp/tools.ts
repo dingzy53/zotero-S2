@@ -58,7 +58,7 @@ export interface ToolDef {
   handler(args: Record<string, any>, ctx: ToolContext): Promise<unknown>;
 }
 
-const MAX_ADD = 25;
+export const MAX_ADD = 25;
 
 // --- shared schema fragments ---
 

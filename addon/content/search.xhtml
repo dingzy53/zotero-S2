@@ -186,6 +186,38 @@
       <html:aside id="s2-detail"></html:aside>
     </html:main>
 
+    <html:footer id="s2-addbar" class="s2-addbar">
+      <html:label data-l10n-id="search-add-to"></html:label>
+      <menulist id="s2-library">
+        <menupopup />
+      </menulist>
+      <menulist id="s2-collection">
+        <menupopup />
+      </menulist>
+      <html:input
+        id="s2-new-collection"
+        hidden="hidden"
+        data-l10n-id="search-new-collection"
+      />
+      <html:input id="s2-tags" data-l10n-id="search-tags" />
+      <menulist id="s2-metadata">
+        <menupopup>
+          <menuitem value="s2" data-l10n-id="search-metadata-s2" />
+          <menuitem
+            value="translator"
+            data-l10n-id="search-metadata-translator"
+          />
+        </menupopup>
+      </menulist>
+      <html:label class="s2-check">
+        <html:input id="s2-attach-pdf" type="checkbox" checked="checked" />
+        <html:span data-l10n-id="search-attach-pdf"></html:span>
+      </html:label>
+      <html:span class="s2-spacer"></html:span>
+      <html:span id="s2-add-hint" class="s2-muted"></html:span>
+      <html:button id="s2-add" class="s2-primary" />
+    </html:footer>
+
     <html:footer class="s2-statusbar">
       <html:span id="s2-status"></html:span>
       <html:span class="s2-spacer"></html:span>

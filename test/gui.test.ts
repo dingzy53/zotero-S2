@@ -2,6 +2,7 @@ import { assert } from "chai";
 import { config } from "../package.json";
 import { FIXTURES } from "./fixtures";
 import { fixtureClient } from "./helpers";
+import type { S2Paper } from "../src/s2/types";
 
 // The test bundle has its own copies of every module, so reach the running
 // plugin's GUI through its api object
@@ -63,8 +64,8 @@ describe("search window: plumbing", function () {
 });
 
 /** Opens the window with S2 served from fixtures. */
-async function openWindow(calls: string[] = []) {
-  api().guiDeps.s2 = () => fixtureClient(undefined, calls);
+async function openWindow(calls: string[] = [], papers?: S2Paper[]) {
+  api().guiDeps.s2 = () => fixtureClient(papers, calls);
   const win = api().openSearchWindow() as Window;
   const ctl = await waitFor(() => api().controllerFor(win), "controller");
   return { win, doc: win.document, ctl };
@@ -238,5 +239,153 @@ describe("search window: searching", function () {
       rows(doc).filter((r) => r.getAttribute("aria-selected") === "true"),
       2,
     );
+  });
+});
+
+describe("search window: adding", function () {
+  this.timeout(60_000);
+  let ROOT: string;
+  let restore: any;
+
+  before(function () {
+    ROOT = `GUI Test ${Date.now()}`;
+    restore = api().guiDeps.s2;
+  });
+
+  // Later suites expect the fixture papers not to be in the library yet
+  after(async function () {
+    const lib = Zotero.Libraries.userLibraryID;
+    const ours = Zotero.Collections.getByLibrary(lib).filter((c) =>
+      c.name.startsWith(ROOT),
+    );
+    for (const c of ours) {
+      const items = c.getChildItems(false, true);
+      for (const sub of Zotero.Collections.getByParent(c.id, true))
+        items.push(...sub.getChildItems(false, true));
+      await Zotero.Items.erase(items.map((i) => i.id));
+      await c.eraseTx();
+    }
+  });
+
+  afterEach(async function () {
+    api().closeSearchWindows();
+    await waitFor(() => api().searchWindows().length === 0, "windows closed");
+    api().guiDeps.s2 = restore;
+  });
+
+  const keydown = (doc: Document, key: string, opts: KeyboardEventInit = {}) =>
+    doc.getElementById("s2-results")!.dispatchEvent(
+      new (doc.defaultView as any).KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        ...opts,
+      }),
+    );
+
+  it("adds the selection to a new collection, then reports duplicates", async function () {
+    const { doc, ctl } = await openWindow();
+    setQuery(doc, "attention");
+    await ctl.search();
+    keydown(doc, "a", { ctrlKey: true });
+    const add = doc.getElementById("s2-add") as HTMLButtonElement;
+    assert.equal(add.textContent, `Add ${FIXTURES.length} papers`);
+    assert.isFalse(add.disabled);
+
+    const menu = doc.getElementById("s2-collection") as any;
+    menu.value = "__new__";
+    menu.dispatchEvent(new (doc.defaultView as any).Event("command"));
+    const path = doc.getElementById("s2-new-collection") as HTMLInputElement;
+    assert.isFalse(path.hidden);
+    path.value = `${ROOT}/Inbox`;
+    (doc.getElementById("s2-tags") as HTMLInputElement).value = "gui, s2";
+    // No network in tests
+    (doc.getElementById("s2-attach-pdf") as HTMLInputElement).checked = false;
+    await ctl.addBar.add();
+
+    const hint = doc.getElementById("s2-hint")!.textContent!;
+    assert.match(hint, new RegExp(`^${FIXTURES.length} added, 0 already`));
+    const lib = Zotero.Libraries.userLibraryID;
+    const root = Zotero.Collections.getByLibrary(lib).find(
+      (c) => c.name === ROOT,
+    )!;
+    const inbox = Zotero.Collections.getByParent(root.id)[0];
+    assert.equal(inbox.name, "Inbox");
+    assert.lengthOf(inbox.getChildItems(), FIXTURES.length);
+    const item = inbox.getChildItems()[0];
+    assert.sameMembers(
+      item.getTags().map((t: any) => t.tag),
+      ["gui", "s2"],
+    );
+    // The new collection becomes the target, and badges appear
+    assert.equal(menu.value, inbox.key);
+    await waitFor(
+      () => rows(doc).every((r) => r.classList.contains("s2-in-library")),
+      "in-library badges",
+    );
+    const entry = api().getActivity()[0];
+    assert.equal(entry.via, "gui");
+    assert.equal(entry.tool, "zotero_add_papers");
+
+    // Showing a row's details offers "Show in Zotero"
+    rows(doc)[0].dispatchEvent(
+      new (doc.defaultView as any).MouseEvent("mousedown", { bubbles: true }),
+    );
+    assert.include(doc.getElementById("s2-detail")!.textContent, "In library");
+    assert.include(
+      doc.getElementById("s2-detail")!.textContent,
+      "Show in Zotero",
+    );
+
+    keydown(doc, "a", { ctrlKey: true });
+    await ctl.addBar.add();
+    assert.match(
+      doc.getElementById("s2-hint")!.textContent!,
+      new RegExp(`^0 added, ${FIXTURES.length} already`),
+    );
+    assert.lengthOf(inbox.getChildItems(), FIXTURES.length);
+  });
+
+  it("caps an add at 25 papers", async function () {
+    const many: S2Paper[] = Array.from({ length: 26 }, (_, i) => ({
+      ...FIXTURES[0],
+      paperId: `${i}`.padStart(40, "f"),
+      title: `Paper ${i}`,
+      externalIds: {},
+    }));
+    const { doc, ctl } = await openWindow([], many);
+    Zotero.Prefs.set(`${config.prefsPrefix}.gui.pageSize`, 50, true);
+    setQuery(doc, "many");
+    try {
+      await ctl.search();
+    } finally {
+      Zotero.Prefs.set(`${config.prefsPrefix}.gui.pageSize`, 25, true);
+    }
+    assert.lengthOf(rows(doc), 26);
+    keydown(doc, "a", { ctrlKey: true });
+    const add = doc.getElementById("s2-add") as HTMLButtonElement;
+    assert.isTrue(add.disabled);
+    assert.match(doc.getElementById("s2-add-hint")!.textContent!, /at most 25/);
+    rows(doc)[0].dispatchEvent(
+      new (doc.defaultView as any).MouseEvent("mousedown", { bubbles: true }),
+    );
+    assert.isFalse(add.disabled);
+  });
+
+  it("targets the collection selected in the main window", async function () {
+    const lib = Zotero.Libraries.userLibraryID;
+    const collection = new Zotero.Collection({
+      libraryID: lib,
+      name: `${ROOT} target`,
+    } as any);
+    await collection.saveTx();
+    const pane = Zotero.getActiveZoteroPane() as any;
+    await pane.collectionsView.selectByID(`C${collection.id}`);
+    const { doc } = await openWindow();
+    assert.equal((doc.getElementById("s2-library") as any).value, String(lib));
+    assert.equal(
+      (doc.getElementById("s2-collection") as any).value,
+      collection.key,
+    );
+    await pane.collectionsView.selectByID(`L${lib}`);
   });
 });

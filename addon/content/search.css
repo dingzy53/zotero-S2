@@ -392,3 +392,30 @@
 .s2-views {
   margin-inline-start: 4px;
 }
+
+.s2-addbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: var(--material-panedivider);
+  background: var(--material-sidepane);
+}
+
+#s2-collection {
+  max-width: 320px;
+}
+
+#s2-tags {
+  width: 180px;
+}
+
+.s2-table tr.s2-in-library .s2-badge {
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+#s2-results:focus-within .s2-table tr[aria-selected="true"] .s2-badge {
+  color: inherit;
+}
