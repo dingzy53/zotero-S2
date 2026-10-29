@@ -79,7 +79,8 @@
   border-end-end-radius: 5px !important;
 }
 
-.s2-modes button[aria-selected="true"] {
+.s2-modes button[aria-selected="true"],
+.s2-modes button[aria-checked="true"] {
   background: var(--fill-quinary);
   font-weight: 600;
 }
@@ -212,7 +213,7 @@
 }
 
 #s2-results:not(:focus-within) .s2-table tbody tr[aria-selected="true"] {
-  background: var(--fill-quinary);
+  background: var(--fill-quarternary);
   color: inherit;
 }
 
@@ -259,4 +260,135 @@
   padding: 0 3px;
   border-radius: 3px;
   background: var(--fill-quinary);
+}
+
+#s2-detail {
+  width: 34%;
+  min-width: 260px;
+  max-width: 520px;
+  overflow: auto;
+  padding: 10px 14px;
+  border-inline-start: var(--material-panedivider);
+  background: var(--material-sidepane);
+}
+
+#s2-root[data-view="cards"] #s2-detail {
+  display: none;
+}
+
+.s2-detail-title {
+  font-size: 15px;
+  margin: 0 0 6px;
+}
+
+.s2-authors {
+  margin-bottom: 4px;
+}
+
+.s2-meta,
+.s2-muted,
+.s2-ids {
+  color: var(--fill-secondary);
+}
+
+.s2-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+}
+
+.s2-abstract {
+  line-height: 1.45;
+  margin: 8px 0;
+}
+
+.s2-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.s2-actions button {
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
+.s2-link {
+  color: LinkText;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.s2-link:hover {
+  text-decoration: underline;
+}
+
+.s2-badge-line {
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.s2-outcome {
+  color: var(--fill-secondary);
+  font-style: italic;
+}
+
+/* card view */
+.s2-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+.s2-card {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: var(--material-border-quinary);
+  background: var(--material-background);
+}
+
+.s2-card[aria-selected="true"] {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -1px;
+}
+
+.s2-card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.s2-card-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.s2-card .s2-abstract {
+  margin: 6px 0 2px;
+}
+
+.s2-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+#s2-root button.s2-more-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  color: LinkText;
+}
+
+.s2-cards-more {
+  margin: 0 10px 10px;
+}
+
+.s2-views {
+  margin-inline-start: 4px;
 }

@@ -3,7 +3,7 @@ import { FluentMessageId } from "../../typings/i10n";
 import { getPrefsPaneID } from "../modules/preferences";
 import type { S2Paper } from "../s2/types";
 import { getString } from "../utils/locale";
-import { getPref } from "../utils/prefs";
+import { getPref, setPref } from "../utils/prefs";
 import { callTool } from "./deps";
 import { el } from "./dom";
 import {
@@ -25,6 +25,8 @@ import {
   papersFromResult,
   planSearch,
 } from "./model";
+import { PaperActions, renderDetail } from "./detail";
+import { ResultsCards } from "./resultsCards";
 import { ResultsTable } from "./resultsTable";
 import type { ResultsView, ViewHost } from "./view";
 
@@ -41,29 +43,56 @@ export interface ResultSet {
 
 const WAITING_AFTER_MS = 1500;
 
+export type ViewKind = "table" | "cards";
+
 export class SearchController implements ViewHost {
   readonly doc: Document;
   mode: Mode = "simple";
   stack: ResultSet[] = [];
   busy = false;
   private generation = 0;
-  private view: ResultsView;
+  viewKind: ViewKind = "table";
+  private view!: ResultsView;
   private noSelection = new Set<string>();
+  private prefObserver: symbol;
+  readonly actions: PaperActions = {};
 
   constructor(readonly win: Window) {
     this.doc = win.document;
-    this.view = new ResultsTable(this, this.$("results"));
     this.buildFilterGrids();
     this.bind();
     this.setMode("simple");
-    this.renderAll();
+    this.setView(getPref("resultsView") === "cards" ? "cards" : "table");
+    this.prefObserver = Zotero.Prefs.registerObserver(
+      `${config.prefsPrefix}.resultsView`,
+      (value: string) => this.setView(value === "cards" ? "cards" : "table"),
+      true,
+    );
     this.$<HTMLInputElement>("query").focus();
   }
 
   destroy() {
     // Responses still in flight must not touch a closed window
     this.generation++;
+    Zotero.Prefs.unregisterObserver(this.prefObserver);
     this.view.destroy();
+  }
+
+  /** Switches between the table + detail pane and the card list. */
+  setView(kind: ViewKind) {
+    if (this.view && kind === this.viewKind) return;
+    this.view?.destroy();
+    this.viewKind = kind;
+    this.$("root").dataset.view = kind;
+    for (const b of this.doc.querySelectorAll<HTMLElement>("[data-view]")) {
+      b.setAttribute("aria-checked", String(b.dataset.view === kind));
+    }
+    const results = this.$("results");
+    this.view =
+      kind === "cards"
+        ? new ResultsCards(this, results, this.actions)
+        : new ResultsTable(this, results);
+    this.renderAll();
   }
 
   $<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -98,6 +127,7 @@ export class SearchController implements ViewHost {
 
   onSelectionChange() {
     this.renderStatus();
+    this.renderDetail();
   }
 
   onOpen(paper: S2Paper) {
@@ -121,6 +151,11 @@ export class SearchController implements ViewHost {
         this.search();
       }
     });
+    for (const b of this.doc.querySelectorAll<HTMLElement>("[data-view]")) {
+      b.addEventListener("click", () =>
+        setPref("resultsView", b.dataset.view === "cards" ? "cards" : "table"),
+      );
+    }
     this.$("filters-reset").addEventListener("click", () =>
       this.setFilters(emptyFilters()),
     );
@@ -248,6 +283,7 @@ export class SearchController implements ViewHost {
       this.focused = this.current.papers[0].paperId;
       this.current.selection.add(this.focused);
       this.view.refresh();
+      this.renderDetail();
       this.showHint(getString("gui-hint-lookup"));
     } else if (plan.rewritten) {
       this.showHint(getString("gui-hint-hyphens"));
@@ -358,6 +394,26 @@ export class SearchController implements ViewHost {
       this.view.render(current.papers);
     }
     this.renderStatus();
+    this.renderDetail();
+  }
+
+  focusedPaper(): S2Paper | null {
+    const current = this.current;
+    if (!current?.focused) return null;
+    return current.papers.find((p) => p.paperId === current.focused) ?? null;
+  }
+
+  renderDetail() {
+    if (this.viewKind !== "table") return;
+    const p = this.focusedPaper();
+    renderDetail(
+      this.doc,
+      this.$("detail"),
+      p,
+      this.actions,
+      p && this.inLibrary(p),
+      p ? this.outcome(p) : undefined,
+    );
   }
 
   renderStatus() {

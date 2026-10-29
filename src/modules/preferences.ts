@@ -10,6 +10,7 @@ import {
 import { clearEntries, getEntries, onChange, record } from "../log/activity";
 import { newStats } from "../s2/types";
 import { errorMessage } from "../mcp/errors";
+import { openSearchWindow } from "../gui/searchWindow";
 
 let paneID: string | undefined;
 
@@ -64,6 +65,16 @@ export function onPrefsLoad(win: Window) {
     setPref("mcpToken", generateToken());
     renderAccess();
   });
+
+  const pageSize = $<XULMenuListElement>("page-size");
+  if (pageSize) {
+    // An int pref: the generic `preference` binding would store a string
+    pageSize.value = String(getPref("gui.pageSize") || 25);
+    pageSize.addEventListener("command", () =>
+      setPref("gui.pageSize", Number(pageSize.value)),
+    );
+  }
+  $("open-search")?.addEventListener("command", () => openSearchWindow());
 
   $("test")?.addEventListener("command", async () => {
     const out = $<HTMLElement>("test-result")!;

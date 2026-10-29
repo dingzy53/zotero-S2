@@ -37,3 +37,22 @@ gui-error-date-format = Dates must look like 2019, 2019-03 or 2019-03-05.
 gui-error-date-order = The start date is after the end date.
 gui-error-citations = Minimum citations must be a whole number.
 gui-error-not-found = No paper found for that id.
+gui-citations = { $count ->
+    [one] 1 citation
+   *[other] { NUMBER($count) } citations
+}
+gui-open-s2 = Semantic Scholar
+gui-open-pdf = PDF
+gui-show-in-zotero = Show in Zotero
+gui-related-citations = Citations
+gui-related-references = References
+gui-related-recommendations = Similar papers
+gui-author-papers = Papers by { $name }
+gui-detail-empty = Select a paper to see its details.
+gui-in-library = ✓ In library
+gui-no-abstract = Semantic Scholar has no abstract for this paper.
+gui-cards-more = Show more
+gui-card-select =
+    .title = Select
+gui-abstract-more = more
+gui-abstract-less = less

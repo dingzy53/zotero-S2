@@ -47,6 +47,10 @@
         class="s2-primary"
         data-l10n-id="search-run"
       />
+      <html:div class="s2-modes s2-views" role="radiogroup">
+        <html:button data-view="table" data-l10n-id="search-view-table" />
+        <html:button data-view="cards" data-l10n-id="search-view-cards" />
+      </html:div>
     </html:header>
 
     <html:section id="s2-filters" hidden="hidden">
@@ -179,6 +183,7 @@
 
     <html:main id="s2-main">
       <html:div id="s2-results" tabindex="0"></html:div>
+      <html:aside id="s2-detail"></html:aside>
     </html:main>
 
     <html:footer class="s2-statusbar">

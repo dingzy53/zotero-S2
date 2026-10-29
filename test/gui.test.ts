@@ -197,4 +197,46 @@ describe("search window: searching", function () {
     assert.match(calls[1], /token=page2/);
     assert.isTrue(more.hidden);
   });
+
+  it("shows details for the focused row and keeps the selection across views", async function () {
+    const { doc, ctl } = await openWindow();
+    Zotero.Prefs.set(`${config.prefsPrefix}.resultsView`, "table", true);
+    setQuery(doc, "attention");
+    await ctl.search();
+    const detail = doc.getElementById("s2-detail")!;
+    assert.include(detail.textContent, "Select a paper");
+    const row = rows(doc).find((r) =>
+      r.textContent!.includes(FIXTURES[0].title!),
+    )!;
+    row.dispatchEvent(
+      new (doc.defaultView as any).MouseEvent("mousedown", { bubbles: true }),
+    );
+    assert.include(detail.textContent, FIXTURES[0].abstract!);
+    assert.include(detail.textContent, "Vaswani");
+
+    (doc.querySelector('[data-view="cards"]') as HTMLElement).click();
+    assert.equal(
+      Zotero.Prefs.get(`${config.prefsPrefix}.resultsView`, true),
+      "cards",
+    );
+    await waitFor(() => doc.querySelectorAll(".s2-card").length, "cards");
+    const checked = [
+      ...doc.querySelectorAll<HTMLInputElement>(".s2-card-check"),
+    ].filter((b) => b.checked);
+    assert.lengthOf(checked, 1);
+    assert.equal(
+      checked[0].closest(".s2-card")!.getAttribute("data-id"),
+      FIXTURES[0].paperId,
+    );
+    // Ticking a second card adds to the same selection
+    const other = doc.querySelectorAll<HTMLInputElement>(".s2-card-check")[1];
+    other.click();
+    assert.equal(ctl.selection.size, 2);
+    Zotero.Prefs.set(`${config.prefsPrefix}.resultsView`, "table", true);
+    await waitFor(() => rows(doc).length, "table again");
+    assert.lengthOf(
+      rows(doc).filter((r) => r.getAttribute("aria-selected") === "true"),
+      2,
+    );
+  });
 });

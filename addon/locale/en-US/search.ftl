@@ -57,3 +57,7 @@ search-syntax-group = grouping
 search-syntax-fuzzy = edit distance
 search-syntax-slop = words within 3 positions
 search-syntax-example = Example:
+search-view-table = Table
+    .title = Table with a detail pane
+search-view-cards = Cards
+    .title = Cards with abstracts
