@@ -1,3 +1,4 @@
+import { config } from "../../package.json";
 import { FluentMessageId } from "../../typings/i10n";
 import { getPrefsPaneID } from "../modules/preferences";
 import type { S2Paper } from "../s2/types";
@@ -125,6 +126,7 @@ export class SearchController implements ViewHost {
     );
     this.$("prev").addEventListener("click", () => this.page("prev"));
     this.$("next").addEventListener("click", () => this.page("next"));
+    this.$("more").addEventListener("click", () => this.page("next"));
     this.$("open-settings").addEventListener("click", () =>
       Zotero.Utilities.Internal.openPreferences(getPrefsPaneID() ?? ""),
     );
@@ -162,6 +164,12 @@ export class SearchController implements ViewHost {
     const filters = this.$("filters");
     filters.hidden = mode !== "advanced" && mode !== "bulk";
     filters.dataset.mode = mode;
+    const suffix =
+      mode === "bulk" ? "-bulk" : mode === "authors" ? "-authors" : "";
+    this.doc.l10n?.setAttributes(
+      this.$("query"),
+      `${config.addonRef}-search-query${suffix}`,
+    );
   }
 
   private checked(id: string): string[] {
@@ -356,11 +364,13 @@ export class SearchController implements ViewHost {
     const current = this.current;
     const prev = this.$<HTMLButtonElement>("prev");
     const next = this.$<HTMLButtonElement>("next");
+    const more = this.$<HTMLButtonElement>("more");
     const paging = current?.paging ?? { kind: "none" };
-    prev.hidden = paging.kind !== "offset";
-    next.hidden = paging.kind === "none";
+    // Offset lists page; bulk token lists grow, since tokens only go forward
+    prev.hidden = next.hidden = paging.kind !== "offset";
+    more.hidden = paging.kind !== "token" || !paging.token;
     prev.disabled = this.busy || !canPrev(paging);
-    next.disabled = this.busy || !canNext(paging);
+    next.disabled = more.disabled = this.busy || !canNext(paging);
     if (this.busy) return;
     if (!current) {
       this.setStatus(getString("gui-status-ready"));

@@ -249,3 +249,14 @@
 .s2-spacer {
   flex: 1;
 }
+
+.s2-syntax td {
+  padding: 1px 12px 1px 0;
+}
+
+#s2-root code {
+  font-family: monospace;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--fill-quinary);
+}

@@ -176,4 +176,25 @@ describe("search window: searching", function () {
       Zotero.Prefs.set(`${config.prefsPrefix}.apiKey`, key, true);
     }
   });
+
+  it("pages bulk results with tokens and a sort", async function () {
+    const calls: string[] = [];
+    const { doc, ctl } = await openWindow(calls);
+    ctl.setMode("bulk");
+    assert.isFalse(doc.getElementById("s2-syntax")!.hidden);
+    (doc.getElementById("s2-sort") as any).value = "citationCount:desc";
+    setQuery(doc, '"attention" +transformer -rnn');
+    await ctl.search();
+    assert.lengthOf(rows(doc), 2);
+    assert.match(calls[0], /\/paper\/search\/bulk\?/);
+    assert.match(calls[0], /sort=citationCount%3Adesc/);
+    assert.match(calls[0], /query=%22attention%22(\+|%20)%2Btransformer/);
+    const more = doc.getElementById("s2-more") as HTMLButtonElement;
+    assert.isFalse(more.hidden);
+    assert.isTrue(doc.getElementById("s2-next")!.hidden);
+    more.click();
+    await waitFor(() => rows(doc).length === 3, "appended rows");
+    assert.match(calls[1], /token=page2/);
+    assert.isTrue(more.hidden);
+  });
 });

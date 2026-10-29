@@ -122,6 +122,41 @@
         </menulist>
         <html:button id="s2-filters-reset" data-l10n-id="search-filter-reset" />
       </html:div>
+      <html:details class="s2-bulk-only" id="s2-syntax">
+        <html:summary data-l10n-id="search-syntax"></html:summary>
+        <html:table class="s2-syntax">
+          <html:tr>
+            <html:td><html:code>+word</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-and"></html:td>
+            <html:td><html:code>-word</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-not"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:td><html:code>a | b</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-or"></html:td>
+            <html:td><html:code>"exact phrase"</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-phrase"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:td><html:code>neur*</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-prefix"></html:td>
+            <html:td><html:code>( … )</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-group"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:td><html:code>word~2</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-fuzzy"></html:td>
+            <html:td><html:code>"a b"~3</html:code></html:td>
+            <html:td data-l10n-id="search-syntax-slop"></html:td>
+          </html:tr>
+        </html:table>
+        <html:p>
+          <html:span data-l10n-id="search-syntax-example"></html:span>
+          <html:code
+            >((cloud computing) | virtualization) +security -privacy</html:code
+          >
+        </html:p>
+      </html:details>
       <html:details>
         <html:summary data-l10n-id="search-filter-fields"></html:summary>
         <html:div id="s2-fields-of-study" class="s2-check-grid"></html:div>
@@ -151,6 +186,7 @@
       <html:span class="s2-spacer"></html:span>
       <html:button id="s2-prev" data-l10n-id="search-prev" />
       <html:button id="s2-next" data-l10n-id="search-next" />
+      <html:button id="s2-more" data-l10n-id="search-more" />
     </html:footer>
   </html:div>
 </window>
