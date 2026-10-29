@@ -13,6 +13,7 @@ export type FluentMessageId =
   | 'log-col-tool'
   | 'log-col-via'
   | 'log-empty'
+  | 'menu-search'
   | 'pref-apikey'
   | 'pref-apikey-help'
   | 'pref-command'
@@ -30,6 +31,7 @@ export type FluentMessageId =
   | 'pref-title'
   | 'pref-token'
   | 'prefs-title'
+  | 'search-window'
   | 'test-failed'
   | 'test-ok'
   | 'test-running';

@@ -1,0 +1,9 @@
+/* Only Zotero theme tokens, so light and dark mode both follow Zotero */
+#s2-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--material-background);
+  color: var(--fill-primary);
+}

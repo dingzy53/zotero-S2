@@ -6,6 +6,12 @@ import {
   registerEndpoints,
   unregisterEndpoints,
 } from "./http/endpoints";
+import { addFTL, registerMenu, removeFTL, unregisterMenu } from "./gui/menu";
+import {
+  closeSearchWindows,
+  onSearchWindowLoad,
+  onSearchWindowUnload,
+} from "./gui/searchWindow";
 
 async function onStartup() {
   await Promise.all([
@@ -18,6 +24,7 @@ async function onStartup() {
   ensureToken();
   await registerPrefsPane();
   registerEndpoints();
+  registerMenu();
 
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
@@ -28,9 +35,10 @@ async function onStartup() {
   addon.data.initialized = true;
 }
 
-async function onMainWindowLoad(_win: _ZoteroTypes.MainWindow): Promise<void> {
+async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   // Create ztoolkit for every window
   addon.data.ztoolkit = createZToolkit();
+  addFTL(win);
 }
 
 async function onMainWindowUnload(_win: Window): Promise<void> {
@@ -39,6 +47,9 @@ async function onMainWindowUnload(_win: Window): Promise<void> {
 
 function onShutdown(): void {
   unregisterEndpoints();
+  closeSearchWindows();
+  unregisterMenu();
+  for (const win of Zotero.getMainWindows()) removeFTL(win);
   ztoolkit.unregisterAll();
   // Remove addon object
   addon.data.alive = false;
@@ -56,10 +67,19 @@ async function onPrefsEvent(type: string, data: { [key: string]: any }) {
   }
 }
 
+async function onSearchWindowEvent(
+  type: "load" | "unload",
+  data: { window: Window },
+) {
+  if (type === "load") onSearchWindowLoad(data.window);
+  else onSearchWindowUnload(data.window);
+}
+
 export default {
   onStartup,
   onShutdown,
   onMainWindowLoad,
   onMainWindowUnload,
   onPrefsEvent,
+  onSearchWindowEvent,
 };

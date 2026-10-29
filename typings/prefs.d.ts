@@ -10,6 +10,10 @@ declare namespace _ZoteroTypes {
       "enable": boolean;
       "apiKey": string;
       "mcpToken": string;
+      "resultsView": string;
+      "gui.pageSize": number;
+      "gui.lastState": string;
+      "gui.history": string;
     };
   }
 }
