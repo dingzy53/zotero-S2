@@ -91,6 +91,8 @@ export class LibraryBadges {
 
 export interface AddHost {
   doc: Document;
+  /** False once the window has closed. */
+  readonly alive: boolean;
   selectedPapers(): S2Paper[];
   setOutcome(paperId: string, text: string): void;
   showHint(text: string | null): void;
@@ -231,6 +233,8 @@ export class AddBar {
       library_id: target.libraryID,
     });
     this.adding = false;
+    // The add finished (items are saved) after the window closed
+    if (!this.host.alive) return;
     if (!outcome.ok) {
       this.host.showHint(null);
       this.host.showError(outcome.message);

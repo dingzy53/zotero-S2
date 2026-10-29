@@ -33,7 +33,12 @@ export function searchWindows(): Window[] {
 
 /** Closes every search window, so none keeps running unloaded plugin code. */
 export function closeSearchWindows() {
-  for (const win of searchWindows()) win.close();
+  for (const win of searchWindows()) {
+    // close() is async: its unload runs after shutdown has removed the
+    // plugin object, so clean up (observer, saved state) now
+    onSearchWindowUnload(win);
+    win.close();
+  }
 }
 
 export function onSearchWindowLoad(win: Window) {

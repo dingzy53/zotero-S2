@@ -5,6 +5,7 @@ import { GUI_FIELDS } from "../s2/fields";
 import type { S2Paper } from "../s2/types";
 import { getString } from "../utils/locale";
 import { getPref, setPref } from "../utils/prefs";
+import { errorMessage } from "../mcp/errors";
 import { callTool } from "./deps";
 import { el } from "./dom";
 import {
@@ -65,6 +66,8 @@ export class SearchController implements ViewHost, AddHost {
   mode: Mode = "simple";
   stack: ResultSet[] = [];
   busy = false;
+  /** False once the window closes; checked after every await. */
+  alive = true;
   private generation = 0;
   viewKind: ViewKind = "table";
   private view!: ResultsView;
@@ -101,7 +104,11 @@ export class SearchController implements ViewHost, AddHost {
   }
 
   destroy() {
+    if (!this.alive) return;
+    this.alive = false;
     this.saveState();
+    // Stops in-library checks that would redraw a closed window
+    this.badges.clear();
     // Responses still in flight must not touch a closed window
     this.generation++;
     Zotero.Prefs.unregisterObserver(this.prefObserver);
@@ -406,8 +413,8 @@ export class SearchController implements ViewHost, AddHost {
       ...request.args,
       ...opts.page,
     });
+    if (gen !== this.generation || !this.alive) return false;
     this.win.clearTimeout(waiting);
-    if (gen !== this.generation) return false;
     this.setBusy(false);
     if (!outcome.ok) {
       this.showError(outcome.message);
@@ -540,6 +547,7 @@ export class SearchController implements ViewHost, AddHost {
         ids: papers.slice(i, i + 500).map((p) => p.paperId),
         fields: "citationStyles",
       });
+      if (!this.alive) return null;
       if (!outcome.ok) {
         this.showHint(null);
         this.showError(outcome.message);
@@ -556,9 +564,21 @@ export class SearchController implements ViewHost, AddHost {
   }
 
   async export(format: ExportFormat, copy = false) {
+    try {
+      await this.exportUnguarded(format, copy);
+    } catch (e) {
+      // Runs from a menu command: an unhandled rejection would be invisible
+      Zotero.logError(e as Error);
+      if (!this.alive) return;
+      this.showHint(null);
+      this.showError(errorMessage(e));
+    }
+  }
+
+  private async exportUnguarded(format: ExportFormat, copy: boolean) {
     this.showError(null);
     const result = await this.exportText(format);
-    if (!result) return;
+    if (!result || !this.alive) return;
     const missing = result.missing
       ? ` ${getString("gui-export-missing", { args: { count: result.missing } })}`
       : "";
@@ -577,11 +597,13 @@ export class SearchController implements ViewHost, AddHost {
     fp.defaultExtension = ext;
     fp.appendFilter(ext.toUpperCase(), `*.${ext}`);
     const rv = await fp.show();
+    if (!this.alive) return;
     if (rv !== fp.returnOK && rv !== fp.returnReplace) {
       this.showHint(null);
       return;
     }
     await IOUtils.writeUTF8(fp.file, result.text);
+    if (!this.alive) return;
     this.showHint(
       getString("gui-export-saved", {
         args: { count: result.count, file: PathUtils.filename(fp.file) },

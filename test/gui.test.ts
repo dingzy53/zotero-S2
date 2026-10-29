@@ -49,6 +49,21 @@ describe("search window: plumbing", function () {
     assert.match(item.getAttribute("label") ?? "", /Semantic Scholar/);
   });
 
+  it("cleans up synchronously when the plugin closes its windows", async function () {
+    Zotero.Prefs.clear(`${config.prefsPrefix}.gui.lastState`, true);
+    const win = api().openSearchWindow() as Window;
+    await waitFor(() => api().controllerFor(win), "controller");
+    (win.document.getElementById("s2-query") as HTMLInputElement).value =
+      "closing time";
+    // On shutdown the plugin object is gone before the window's unload runs
+    api().closeSearchWindows();
+    assert.isUndefined(api().controllerFor(win));
+    assert.include(
+      Zotero.Prefs.get(`${config.prefsPrefix}.gui.lastState`, true) as string,
+      "closing time",
+    );
+  });
+
   it("opens one window and focuses it on a second open", async function () {
     const first = api().openSearchWindow() as Window;
     await waitFor(

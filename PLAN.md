@@ -4,7 +4,7 @@
 
 ## Status (2026-10-29)
 
-All eight steps are implemented on `feat/search-gui`, one commit each. `npm run build`, `npm run lint:check` and the Zotero test run pass after every step: the suite went from 88 to 122 tests.
+All eight steps are implemented on `feat/search-gui`, one commit each. `npm run build`, `npm run lint:check` and the Zotero test run pass after every step: the suite went from 88 to 123 tests.
 
 Where the build differs from this plan:
 

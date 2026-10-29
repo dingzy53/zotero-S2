@@ -13,10 +13,10 @@
   width="1100"
   height="760"
   onload="
-    Zotero.__addonInstance__.hooks.onSearchWindowEvent('load', { window })
+    Zotero.__addonInstance__?.hooks.onSearchWindowEvent('load', { window })
   "
   onunload="
-    Zotero.__addonInstance__.hooks.onSearchWindowEvent('unload', { window })
+    Zotero.__addonInstance__?.hooks.onSearchWindowEvent('unload', { window })
   "
 >
   <script>
