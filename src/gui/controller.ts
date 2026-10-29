@@ -30,9 +30,18 @@ import {
 } from "./model";
 import { AddBar, AddHost, LibraryBadges, defaultTarget } from "./addBar";
 import { PaperActions, RelatedKind, renderDetail } from "./detail";
+import { EXTENSIONS, ExportFormat, joinBibtex, toCSV, toRIS } from "./export";
 import { ResultsCards } from "./resultsCards";
 import { ResultsTable } from "./resultsTable";
 import type { ResultsView, ViewHost } from "./view";
+import {
+  GuiState,
+  loadHistory,
+  loadState,
+  recordHistory,
+  saveState,
+} from "./state";
+import { newFilePicker } from "../zotero/apis";
 
 /** One screen of results; related navigation pushes more of these. */
 export interface ResultSet {
@@ -75,8 +84,13 @@ export class SearchController implements ViewHost, AddHost {
     this.buildFilterGrids();
     this.bind();
     this.addBar = new AddBar(this);
-    this.addBar.setTarget(defaultTarget(null));
-    this.setMode("simple");
+    const state = loadState();
+    this.addBar.setTarget(defaultTarget(state.target));
+    this.addBar.setOptions(state);
+    this.setMode(state.mode);
+    this.$<HTMLInputElement>("query").value = state.query;
+    this.setFilters(state.filters);
+    if (state.sort) (this.$("sort") as any).value = state.sort;
     this.setView(getPref("resultsView") === "cards" ? "cards" : "table");
     this.prefObserver = Zotero.Prefs.registerObserver(
       `${config.prefsPrefix}.resultsView`,
@@ -87,6 +101,7 @@ export class SearchController implements ViewHost, AddHost {
   }
 
   destroy() {
+    this.saveState();
     // Responses still in flight must not touch a closed window
     this.generation++;
     Zotero.Prefs.unregisterObserver(this.prefObserver);
@@ -221,6 +236,19 @@ export class SearchController implements ViewHost, AddHost {
     this.$("next").addEventListener("click", () => this.page("next"));
     this.$("more").addEventListener("click", () => this.page("next"));
     this.$("back").addEventListener("click", () => this.goBack());
+    this.$("history-popup").addEventListener("popupshowing", () =>
+      this.fillHistory(),
+    );
+    for (const item of this.$("export-popup").querySelectorAll<HTMLElement>(
+      "[data-format]",
+    )) {
+      item.addEventListener("command", () =>
+        this.export(
+          item.dataset.format as ExportFormat,
+          item.dataset.copy === "true",
+        ),
+      );
+    }
     this.$("pool").addEventListener("command", () =>
       this.setPool((this.$("pool") as any).value),
     );
@@ -335,6 +363,8 @@ export class SearchController implements ViewHost, AddHost {
       return;
     }
     const label = form.query.trim();
+    recordHistory({ mode: form.mode, query: label });
+    this.saveState();
     const ok = await this.load(plan.request, { label, replace: true });
     if (!ok) return;
     if (plan.kind === "lookup") {
@@ -429,6 +459,134 @@ export class SearchController implements ViewHost, AddHost {
     this.renderAll();
     if (!opts.append) this.$("results").scrollTop = 0;
     return true;
+  }
+
+  currentState(): GuiState {
+    const form = this.readForm();
+    const target = this.addBar.target();
+    const options = this.addBar.options();
+    return {
+      mode: form.mode,
+      query: form.query,
+      filters: form.filters,
+      sort: form.sort,
+      // A typed new-collection path isn't a collection yet
+      target: { libraryID: target.libraryID, collection: target.collection },
+      tags: options.tags,
+      metadata: options.metadata,
+      attachPdf: options.attachPdf,
+    };
+  }
+
+  saveState() {
+    try {
+      saveState(this.currentState());
+    } catch (e) {
+      Zotero.logError(e as Error);
+    }
+  }
+
+  private fillHistory() {
+    const popup = this.$("history-popup");
+    popup.replaceChildren();
+    const entries = loadHistory();
+    if (!entries.length) {
+      const item = this.doc.createXULElement("menuitem");
+      item.setAttribute("label", getString("gui-history-empty"));
+      item.setAttribute("disabled", "true");
+      popup.append(item);
+      return;
+    }
+    for (const entry of entries) {
+      const item = this.doc.createXULElement("menuitem");
+      item.setAttribute(
+        "label",
+        `${entry.query}  —  ${getString(`gui-mode-${entry.mode}` as FluentMessageId)}`,
+      );
+      item.addEventListener("command", () => {
+        this.setMode(entry.mode);
+        this.$<HTMLInputElement>("query").value = entry.query;
+        this.search();
+      });
+      popup.append(item);
+    }
+  }
+
+  /** The selected papers, or every loaded one when nothing is selected. */
+  exportPapers(): S2Paper[] {
+    const selected = this.selectedPapers();
+    return selected.length ? selected : (this.current?.papers ?? []);
+  }
+
+  /** Serializes the export set; BibTeX comes from S2, 500 papers per call. */
+  async exportText(
+    format: ExportFormat,
+  ): Promise<{ text: string; count: number; missing: number } | null> {
+    const papers = this.exportPapers();
+    if (!papers.length) {
+      this.showError(getString("gui-export-nothing"));
+      return null;
+    }
+    if (format === "csv")
+      return { text: toCSV(papers), count: papers.length, missing: 0 };
+    if (format === "ris")
+      return { text: toRIS(papers), count: papers.length, missing: 0 };
+    this.showHint(
+      getString("gui-export-fetching", { args: { count: papers.length } }),
+    );
+    const rows: Array<{ id: string; paper: any }> = [];
+    for (let i = 0; i < papers.length; i += 500) {
+      const outcome = await callTool("s2_get_papers", {
+        ids: papers.slice(i, i + 500).map((p) => p.paperId),
+        fields: "citationStyles",
+      });
+      if (!outcome.ok) {
+        this.showHint(null);
+        this.showError(outcome.message);
+        return null;
+      }
+      rows.push(...((outcome.value as any).papers ?? []));
+    }
+    const { text, missing } = joinBibtex(rows);
+    return {
+      text,
+      count: rows.length - missing.length,
+      missing: missing.length,
+    };
+  }
+
+  async export(format: ExportFormat, copy = false) {
+    this.showError(null);
+    const result = await this.exportText(format);
+    if (!result) return;
+    const missing = result.missing
+      ? ` ${getString("gui-export-missing", { args: { count: result.missing } })}`
+      : "";
+    if (copy) {
+      Zotero.Utilities.Internal.copyTextToClipboard(result.text);
+      this.showHint(
+        getString("gui-export-copied", { args: { count: result.count } }) +
+          missing,
+      );
+      return;
+    }
+    const fp = newFilePicker();
+    fp.init(this.win, getString("gui-export-title"), fp.modeSave);
+    const ext = EXTENSIONS[format];
+    fp.defaultString = `semantic-scholar.${ext}`;
+    fp.defaultExtension = ext;
+    fp.appendFilter(ext.toUpperCase(), `*.${ext}`);
+    const rv = await fp.show();
+    if (rv !== fp.returnOK && rv !== fp.returnReplace) {
+      this.showHint(null);
+      return;
+    }
+    await IOUtils.writeUTF8(fp.file, result.text);
+    this.showHint(
+      getString("gui-export-saved", {
+        args: { count: result.count, file: PathUtils.filename(fp.file) },
+      }) + missing,
+    );
   }
 
   private pageSize(): number {

@@ -11,6 +11,7 @@ import { clearEntries, getEntries, onChange, record } from "../log/activity";
 import { newStats } from "../s2/types";
 import { errorMessage } from "../mcp/errors";
 import { openSearchWindow } from "../gui/searchWindow";
+import { clearHistory } from "../gui/state";
 
 let paneID: string | undefined;
 
@@ -45,15 +46,19 @@ export function onPrefsLoad(win: Window) {
   };
   renderAccess();
 
-  const copy = (text: string, button: Element | null) => {
-    Zotero.Utilities.Internal.copyTextToClipboard(text);
+  // Briefly swaps a button's label to confirm an action
+  const copyFeedback = (button: Element | null, text: string) => {
     // XUL buttons read `label` as a property since Zotero 8
     const btn = button as (Element & { label?: string }) | null;
     if (btn?.label) {
       const label = btn.label;
-      btn.label = getString("copied");
+      btn.label = text;
       win.setTimeout(() => (btn.label = label), 1200);
     }
+  };
+  const copy = (text: string, button: Element | null) => {
+    Zotero.Utilities.Internal.copyTextToClipboard(text);
+    copyFeedback(button, getString("copied"));
   };
   $("copy-token")?.addEventListener("command", (e: Event) =>
     copy(getPref("mcpToken"), e.target as Element),
@@ -75,6 +80,10 @@ export function onPrefsLoad(win: Window) {
     );
   }
   $("open-search")?.addEventListener("command", () => openSearchWindow());
+  $("clear-history")?.addEventListener("command", (e: Event) => {
+    clearHistory();
+    copyFeedback(e.target as Element, getString("history-cleared"));
+  });
 
   $("test")?.addEventListener("command", async () => {
     const out = $<HTMLElement>("test-result")!;

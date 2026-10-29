@@ -42,11 +42,26 @@
         <html:button data-mode="authors" data-l10n-id="search-mode-authors" />
       </html:div>
       <html:input id="s2-query" type="search" data-l10n-id="search-query" />
+      <button id="s2-history" type="menu" data-l10n-id="search-history">
+        <menupopup id="s2-history-popup" />
+      </button>
       <html:button
         id="s2-search"
         class="s2-primary"
         data-l10n-id="search-run"
       />
+      <button id="s2-export" type="menu" data-l10n-id="search-export">
+        <menupopup id="s2-export-popup">
+          <menuitem
+            data-format="bibtex"
+            data-copy="true"
+            data-l10n-id="search-export-bibtex-copy"
+          />
+          <menuitem data-format="bibtex" data-l10n-id="search-export-bibtex" />
+          <menuitem data-format="ris" data-l10n-id="search-export-ris" />
+          <menuitem data-format="csv" data-l10n-id="search-export-csv" />
+        </menupopup>
+      </button>
       <html:div class="s2-modes s2-views" role="radiogroup">
         <html:button data-view="table" data-l10n-id="search-view-table" />
         <html:button data-view="cards" data-l10n-id="search-view-cards" />

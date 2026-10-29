@@ -64,7 +64,14 @@ describe("search window: plumbing", function () {
 });
 
 /** Opens the window with S2 served from fixtures. */
-async function openWindow(calls: string[] = [], papers?: S2Paper[]) {
+async function openWindow(
+  calls: string[] = [],
+  papers?: S2Paper[],
+  keepState = false,
+) {
+  // Each test starts from a fresh window unless it checks the restore
+  if (!keepState)
+    Zotero.Prefs.clear(`${config.prefsPrefix}.gui.lastState`, true);
   api().guiDeps.s2 = () => fixtureClient(papers, calls);
   const win = api().openSearchWindow() as Window;
   const ctl = await waitFor(() => api().controllerFor(win), "controller");
@@ -475,5 +482,109 @@ describe("search window: adding", function () {
       collection.key,
     );
     await pane.collectionsView.selectByID(`L${lib}`);
+  });
+});
+
+describe("search window: memory and export", function () {
+  this.timeout(30_000);
+  let restore: any;
+
+  before(function () {
+    restore = api().guiDeps.s2;
+  });
+
+  afterEach(async function () {
+    api().closeSearchWindows();
+    await waitFor(() => api().searchWindows().length === 0, "windows closed");
+    api().guiDeps.s2 = restore;
+  });
+
+  it("restores the last search and options when reopened", async function () {
+    const first = await openWindow();
+    let { doc, ctl } = first;
+    ctl.setMode("advanced");
+    setQuery(doc, "graph networks");
+    (doc.getElementById("s2-year-from") as HTMLInputElement).value = "2019";
+    (
+      doc.querySelector(
+        '#s2-publication-types input[value="Review"]',
+      ) as HTMLInputElement
+    ).checked = true;
+    (doc.getElementById("s2-tags") as HTMLInputElement).value = "to-read";
+    (doc.getElementById("s2-attach-pdf") as HTMLInputElement).checked = false;
+    first.win.close();
+    await waitFor(() => api().searchWindows().length === 0, "closed");
+
+    ({ doc, ctl } = await openWindow([], undefined, true));
+    assert.equal(ctl.mode, "advanced");
+    assert.isFalse(doc.getElementById("s2-filters")!.hidden);
+    assert.equal(
+      (doc.getElementById("s2-query") as HTMLInputElement).value,
+      "graph networks",
+    );
+    assert.equal(
+      (doc.getElementById("s2-year-from") as HTMLInputElement).value,
+      "2019",
+    );
+    assert.isTrue(
+      (
+        doc.querySelector(
+          '#s2-publication-types input[value="Review"]',
+        ) as HTMLInputElement
+      ).checked,
+    );
+    assert.equal(
+      (doc.getElementById("s2-tags") as HTMLInputElement).value,
+      "to-read",
+    );
+    assert.isFalse(
+      (doc.getElementById("s2-attach-pdf") as HTMLInputElement).checked,
+    );
+  });
+
+  it("offers recent searches and reruns one", async function () {
+    Zotero.Prefs.clear(`${config.prefsPrefix}.gui.history`, true);
+    const calls: string[] = [];
+    const { doc, ctl } = await openWindow(calls);
+    setQuery(doc, "first query");
+    await ctl.search();
+    ctl.setMode("bulk");
+    setQuery(doc, "second +query");
+    await ctl.search();
+    const popup = doc.getElementById("s2-history-popup")!;
+    popup.dispatchEvent(new (doc.defaultView as any).Event("popupshowing"));
+    const items = [...popup.children] as XULElement[];
+    assert.lengthOf(items, 2);
+    assert.match(items[0].getAttribute("label")!, /^second \+query/);
+    items[1].dispatchEvent(new (doc.defaultView as any).Event("command"));
+    await waitFor(() => calls.length === 3 && !ctl.busy, "rerun");
+    assert.equal(ctl.mode, "simple");
+    assert.match(calls[2], /\/paper\/search\?.*query=first/);
+  });
+
+  it("exports the selection as CSV and BibTeX", async function () {
+    const withBib = FIXTURES.map((p) => ({
+      ...p,
+      citationStyles:
+        p === FIXTURES[1] ? undefined : { bibtex: `@misc{${p.paperId}}` },
+    })) as S2Paper[];
+    const calls: string[] = [];
+    const { doc, ctl } = await openWindow(calls, withBib);
+    setQuery(doc, "attention");
+    await ctl.search();
+    // Nothing selected: everything loaded
+    const all = await ctl.exportText("csv");
+    assert.equal(all.count, FIXTURES.length);
+    assert.lengthOf(all.text.trim().split("\r\n"), FIXTURES.length + 1);
+
+    ctl.current.selection.add(FIXTURES[0].paperId);
+    ctl.current.selection.add(FIXTURES[1].paperId);
+    const bib = await ctl.exportText("bibtex");
+    assert.equal(bib.count, 1);
+    assert.equal(bib.missing, 1);
+    assert.equal(bib.text, `@misc{${FIXTURES[0].paperId}}\n`);
+    assert.match(calls.at(-1)!, /POST .*\/paper\/batch\?fields=citationStyles/);
+    const ris = await ctl.exportText("ris");
+    assert.equal(ris.count, 2);
   });
 });

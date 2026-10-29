@@ -35,3 +35,25 @@ export const Attachments = (): AttachmentsAPI =>
 
 export const RecognizeDocument = (): RecognizeDocumentAPI =>
   (Zotero as any).RecognizeDocument as RecognizeDocumentAPI;
+
+/** chrome/content/zotero/modules/filePicker.mjs (Zotero 8+ needs a BrowsingContext). */
+export interface FilePicker {
+  init(parent: Window, title: string, mode: number): void;
+  appendFilter(title: string, filter: string): void;
+  appendFilters(mask: number): void;
+  show(): Promise<number>;
+  defaultString: string;
+  defaultExtension: string;
+  file: string;
+  readonly modeSave: number;
+  readonly returnOK: number;
+  readonly returnReplace: number;
+  readonly filterAll: number;
+}
+
+export function newFilePicker(): FilePicker {
+  const { FilePicker } = ChromeUtils.importESModule(
+    "chrome://zotero/content/modules/filePicker.mjs",
+  ) as { FilePicker: new () => FilePicker };
+  return new FilePicker();
+}
