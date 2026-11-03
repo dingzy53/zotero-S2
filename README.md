@@ -11,7 +11,7 @@ The plugin serves an **MCP endpoint from inside Zotero**, on Zotero's own local 
 
 - **Search and explore:** relevance and boolean search, title matching, full-text snippets, citations and references, recommendations, authors.
 - **File papers:** add up to 25 papers per call to a collection, given by key or by slash path (`Project/Reading`). Missing collections are created. Papers already in your library are matched by DOI, arXiv id, S2 id or title + year, then reused rather than duplicated.
-- **Attach PDFs:** sources are tried in order: the S2 open-access PDF, then arXiv, then Zotero's own "Find Available PDF" resolvers. Zotero rejects anything that isn't really a PDF.
+- **Attach PDFs:** sources are tried in order: the S2 open-access PDF, then arXiv, then Zotero's own "Find Available PDF" resolvers. Zotero rejects anything that isn't really a PDF. When there's no open copy, an agent can pass a PDF URL or article page, or hand over a PDF it downloaded itself (a local path, or the bytes as base64).
 - **Fill in metadata:** enrich existing items with abstracts, dates, venues, DOIs and authors from Semantic Scholar.
 - **A search window for people:** **Tools → Search Semantic Scholar…** offers simple, advanced and boolean search, authors, citations and recommendations, and adds what you pick straight into a collection.
 - **Polite to Semantic Scholar:** keyed requests only, at most 1 per second across all callers, with exponential backoff.
@@ -90,7 +90,8 @@ Open **Tools → Search Semantic Scholar…** (or **Open search window** in sett
 | `zotero_find_in_library`                                                                | Which papers are already in Zotero, plus their collections and PDF status                                                                                 |
 | `zotero_add_papers`                                                                     | Add up to 25 papers to a collection, with PDFs, tags and a note. Metadata comes from S2 or from Zotero's DOI/arXiv translators                            |
 | `zotero_attach_pdf`                                                                     | Find and attach PDFs for up to 25 existing items                                                                                                          |
-| `zotero_add_pdf_from_url`                                                               | Download a PDF and attach it to an item, or save it standalone and let Zotero recognize its metadata                                                      |
+| `zotero_add_pdf_from_url`                                                               | Download a PDF, from a direct link or an article page, and attach it to an item, or save it standalone and let Zotero recognize its metadata              |
+| `zotero_add_pdf_file`                                                                   | Import a PDF the agent already has (an absolute path on this computer, or base64 bytes, up to 50 MB) onto an item or standalone                           |
 | `zotero_enrich_items`                                                                   | Fill missing metadata on up to 25 existing items from S2; items without ids need an exact title (and no conflicting year)                                 |
 
 Every call appears in the **Activity** table in settings, with its duration, number of S2 requests, retries and any error.
@@ -126,7 +127,8 @@ What leaves your machine:
 
 - Requests to `api.semanticscholar.org`, with your API key.
 - PDF downloads from the open-access URL that S2 reports and from arXiv. After those, Zotero's own "Find Available PDF" resolvers run, the same ones Zotero uses when you click it: the DOI landing page, the item's URL, and Zotero's open-access lookup service.
-- `zotero_add_pdf_from_url` downloads the URL it's given. With `recognize` on (the default), Zotero's metadata recognizer sends text from the PDF to Zotero's recognition service, just as **Retrieve Metadata for PDF** does.
+- `zotero_add_pdf_from_url` downloads the URL it's given; for an article page, it follows the page's PDF link. With `recognize` on (the default), Zotero's metadata recognizer sends text from the PDF to Zotero's recognition service, just as **Retrieve Metadata for PDF** does.
+- `zotero_add_pdf_file` reads only the `.pdf` file it's given (it must start with `%PDF-`), and stores a copy in Zotero. The copy syncs like any attachment, and the original file is never moved or deleted. Standalone imports are recognized the same way as above.
 - With `metadata_source: "translator"`, the DOI or arXiv lookups that Zotero's translators perform.
 
 The plugin itself contacts nothing else, and it collects no telemetry. To report a vulnerability, see [SECURITY.md](SECURITY.md).
