@@ -184,4 +184,20 @@ describe("HTTP REST mirror", function () {
     assert.equal(bad.status, 400);
     assert.match(bad.json.error, /Unknown argument "bogus"/);
   });
+
+  it("accepts a base64 PDF in the JSON body", async function () {
+    const pdf = "%PDF-1.4\n% http test\ntrailer << >>\n%%EOF\n";
+    const r = await send("POST", "/s2/tools/zotero_add_pdf_file", {
+      headers: { ...AUTH, ...JSON_TYPE },
+      body: { content_base64: btoa(pdf), recognize: false },
+    });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.status, "attached");
+    const att = Zotero.Items.getByLibraryAndKey(
+      Zotero.Libraries.userLibraryID,
+      r.json.attachmentKey,
+    ) as Zotero.Item;
+    assert.isTrue(att.isPDFAttachment());
+    await att.eraseTx();
+  });
 });

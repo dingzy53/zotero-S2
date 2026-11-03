@@ -32,8 +32,15 @@ import {
   applyMapped,
   createItem,
 } from "../zotero/importer";
-import { PdfStatus, attachPDF } from "../zotero/pdf";
-import { Attachments, RecognizeDocument } from "../zotero/apis";
+import {
+  MAX_PDF_BYTES,
+  PdfStatus,
+  PdfTarget,
+  attachPDF,
+  importPDFFile,
+  importPDFFromURL,
+  writeTempPDF,
+} from "../zotero/pdf";
 import { s2ToZotero } from "../zotero/s2ToZotero";
 import { libraryWrites } from "../zotero/writeLock";
 import { ToolError, errorMessage } from "./errors";
@@ -181,6 +188,33 @@ function isSameWork(item: Zotero.Item, paper: S2Paper): boolean {
 }
 
 // --- tools ---
+
+/** Where an agent-supplied PDF goes: onto a parent item, or standalone. */
+async function pdfTarget(
+  lib: number,
+  args: Record<string, any>,
+): Promise<PdfTarget> {
+  if (args.parent_item_key) {
+    // Zotero gives a child attachment its parent's collections
+    if (args.collection) {
+      throw new ToolError(
+        "Give parent_item_key or collection, not both: an attachment belongs to its parent's collections",
+      );
+    }
+    return { parent: getItem(lib, args.parent_item_key) };
+  }
+  const target = args.collection
+    ? await resolveCollection(lib, args.collection, args.create_collection)
+    : null;
+  return {
+    libraryID: lib,
+    collection: target?.collection ?? null,
+    recognize: args.recognize,
+  };
+}
+
+const PDF_HINT =
+  "No open copy was found for some items. If you can get the PDF, use zotero_add_pdf_from_url (URL or landing page) or zotero_add_pdf_file (local path or base64).";
 
 export const TOOLS: ToolDef[] = [
   {
@@ -799,6 +833,7 @@ export const TOOLS: ToolDef[] = [
           pdfAttached: rows.filter((r) => r.pdf === "attached").length,
         },
         results: rows,
+        ...(rows.some((r) => r.pdf === "not_found") && { hint: PDF_HINT }),
       };
     },
   },
@@ -840,14 +875,17 @@ export const TOOLS: ToolDef[] = [
           pdf: await attachPDF(item, papers[i]),
         })),
       );
-      return { results };
+      return {
+        results,
+        ...(results.some((r) => r.pdf === "not_found") && { hint: PDF_HINT }),
+      };
     },
   },
   {
     name: "zotero_add_pdf_from_url",
     title: "Add a PDF from a URL",
     description:
-      "Download a PDF into Zotero. With parent_item_key it is attached to that item; otherwise it is saved standalone (optionally into a collection) and Zotero's metadata recognizer creates a parent item.",
+      "Download a PDF into Zotero. Works with direct PDF links and with article landing pages (Zotero follows the page to its PDF). With parent_item_key it is attached to that item; otherwise it is saved standalone (optionally into a collection) and Zotero's metadata recognizer creates a parent item. If the site blocks the download, fetch the file yourself and use zotero_add_pdf_file.",
     inputSchema: {
       type: "object",
       properties: {
@@ -869,44 +907,65 @@ export const TOOLS: ToolDef[] = [
       const lib = resolveLibraryID(args.library_id, true);
       if (!/^https?:\/\//i.test(args.url))
         throw new ToolError("url must be http(s)");
-
-      if (args.parent_item_key) {
-        const parent = getItem(lib, args.parent_item_key);
-        const att = await Attachments().addFileFromURLs(parent, [
-          { url: args.url },
-        ]);
-        if (!att) throw new ToolError("URL did not return a PDF");
-        return { attachmentKey: att.key, parent: describeItem(parent) };
+      return importPDFFromURL(args.url, await pdfTarget(lib, args));
+    },
+  },
+  {
+    name: "zotero_add_pdf_file",
+    title: "Add a PDF file",
+    description: `Import a PDF you already have into Zotero (stored as a copy; your file is left in place). Give exactly one of path (an absolute path on the computer running Zotero) or content_base64 (the file's bytes, for agents on another machine; max ${MAX_PDF_BYTES / 1024 / 1024} MB). With parent_item_key it is attached to that item, and the same file is never attached twice; otherwise it is saved standalone, optionally into a collection, and Zotero's metadata recognizer (which sends text from the PDF to Zotero's service) creates a parent item. Use this when zotero_attach_pdf or zotero_add_pdf_from_url can't fetch a paywalled or bot-protected PDF but you can.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Absolute path to a .pdf file on the Zotero computer.",
+        },
+        content_base64: {
+          type: "string",
+          description: "The PDF's bytes, base64-encoded.",
+        },
+        filename: {
+          type: "string",
+          description:
+            'File name for a standalone base64 upload, e.g. "paper.pdf".',
+        },
+        title: {
+          type: "string",
+          description: "Attachment title (default: Zotero's).",
+        },
+        parent_item_key: { type: "string" },
+        collection: collectionRef,
+        create_collection: { type: "boolean", default: true },
+        recognize: { type: "boolean", default: true },
+        library_id: libraryID,
+      },
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async handler(args) {
+      const lib = resolveLibraryID(args.library_id, true);
+      const hasPath = args.path !== undefined;
+      if (hasPath === (args.content_base64 !== undefined)) {
+        throw new ToolError("Give exactly one of path or content_base64");
       }
-
-      const target = args.collection
-        ? await resolveCollection(lib, args.collection, args.create_collection)
-        : null;
-      const att = await Attachments().importFromURL({
-        libraryID: lib,
-        url: args.url,
-        contentType: "application/pdf",
-        collections: target ? [target.collection.id] : undefined,
+      const target = await pdfTarget(lib, args);
+      if (hasPath) {
+        return importPDFFile(args.path, target, { title: args.title });
+      }
+      const tmp = await writeTempPDF(args.content_base64);
+      const name = args.filename
+        ? String(args.filename).replace(/\.pdf$/i, "")
+        : undefined;
+      return importPDFFile(tmp, target, {
+        title: args.title,
+        fileBaseName: name ? Zotero.File.getValidFileName(name) : undefined,
+        ownTemp: true,
       });
-      let parent: Zotero.Item | null = null;
-      if (args.recognize && RecognizeDocument().canRecognize(att)) {
-        try {
-          await RecognizeDocument().recognizeItems([att]);
-          const parentID = (Zotero.Items.get(att.id) as Zotero.Item)
-            .parentItemID;
-          parent = parentID
-            ? (Zotero.Items.get(parentID) as Zotero.Item)
-            : null;
-        } catch (e) {
-          Zotero.debug(`[Zotero S2] recognize failed: ${e}`);
-        }
-      }
-      return {
-        attachmentKey: att.key,
-        recognized: !!parent,
-        parent: parent ? describeItem(parent) : null,
-        collection: target ? describeCollection(target.collection) : null,
-      };
     },
   },
   {

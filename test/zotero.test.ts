@@ -7,6 +7,9 @@ import { RateLimiter } from "../src/s2/rateLimiter";
 import { newStats } from "../src/s2/types";
 import { resolveCollection } from "../src/zotero/collections";
 import { createItem } from "../src/zotero/importer";
+import { MAX_PDF_BYTES, writeTempPDF } from "../src/zotero/pdf";
+import { getEntries } from "../src/log/activity";
+import { runTool as runToolLogged } from "../src/mcp/runTool";
 import { ATTENTION, DEEP_LEARNING, ARXIV_ONLY } from "./fixtures";
 import { fixtureClient, response } from "./helpers";
 
@@ -246,6 +249,28 @@ describe("zotero_attach_pdf", function () {
       api.getFileResolvers = original.resolvers;
     }
   });
+
+  it("points to the PDF tools when nothing is found", async function () {
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", "PDF hint test");
+    await item.saveTx();
+    const api = Zotero.Attachments as any;
+    const original = {
+      add: api.addFileFromURLs,
+      resolvers: api.getFileResolvers,
+    };
+    api.getFileResolvers = () => [];
+    api.addFileFromURLs = async () => false;
+    try {
+      const res = await runTool("zotero_attach_pdf", { item_keys: [item.key] });
+      assert.equal(res.results[0].pdf, "not_found");
+      assert.match(res.hint, /zotero_add_pdf_file/);
+    } finally {
+      api.addFileFromURLs = original.add;
+      api.getFileResolvers = original.resolvers;
+      await item.eraseTx();
+    }
+  });
 });
 
 describe("zotero_find_in_library", function () {
@@ -396,6 +421,268 @@ describe("fields override on recommendations and author papers", function () {
   });
 });
 
+describe("adding PDF files", function () {
+  let dir: string;
+  const created: number[] = [];
+  let n = 0;
+
+  /** A tiny PDF; `tag` makes each one hash differently. */
+  function pdfBytes(tag = String(++n)) {
+    return new TextEncoder().encode(
+      `%PDF-1.4\n% ${tag}\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n`,
+    );
+  }
+  async function file(name: string, bytes: Uint8Array) {
+    const path = PathUtils.join(dir, name);
+    await IOUtils.write(path, bytes);
+    return path;
+  }
+  async function parentItem(title: string) {
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", title);
+    await item.saveTx();
+    created.push(item.id);
+    return item;
+  }
+  function pdfChildren(item: Zotero.Item) {
+    return item
+      .getAttachments()
+      .map((id) => Zotero.Items.get(id) as Zotero.Item)
+      .filter((a) => a.isPDFAttachment());
+  }
+  async function tempLeftovers() {
+    const names = await IOUtils.getChildren(PathUtils.tempDir);
+    return names.filter((p) => /zotero-s2-[0-9a-f]+\.pdf$/.test(p)).length;
+  }
+  function track(res: any) {
+    const att = Zotero.Items.getByLibraryAndKey(
+      Zotero.Libraries.userLibraryID,
+      res.attachmentKey,
+    ) as Zotero.Item;
+    if (att) created.push(att.id);
+    return att;
+  }
+
+  before(async function () {
+    dir = PathUtils.join(PathUtils.tempDir, `zs2-pdf-test-${Date.now()}`);
+    await IOUtils.makeDirectory(dir);
+  });
+
+  after(async function () {
+    await Zotero.Items.erase(created);
+    await IOUtils.remove(dir, { recursive: true, ignoreAbsent: true });
+  });
+
+  it("attaches a local file to a parent, once per distinct file", async function () {
+    const parent = await parentItem("PDF file test");
+    const path = await file("paper.pdf", pdfBytes());
+    const res = await runTool("zotero_add_pdf_file", {
+      path,
+      parent_item_key: parent.key,
+    });
+    assert.equal(res.status, "attached");
+    const att = track(res);
+    assert.equal(att.parentItemID, parent.id);
+    assert.equal(att.attachmentContentType, "application/pdf");
+    assert.isTrue(await IOUtils.exists(path), "the source file stays");
+
+    const again = await runTool("zotero_add_pdf_file", {
+      path,
+      parent_item_key: parent.key,
+    });
+    assert.equal(again.status, "already");
+    assert.equal(again.attachmentKey, res.attachmentKey);
+    assert.lengthOf(pdfChildren(parent), 1);
+
+    const other = await file("supplement.pdf", pdfBytes());
+    track(
+      await runTool("zotero_add_pdf_file", {
+        path: other,
+        parent_item_key: parent.key,
+      }),
+    );
+    assert.lengthOf(pdfChildren(parent), 2);
+  });
+
+  it("attaches one copy when the same file is sent in parallel", async function () {
+    const parent = await parentItem("PDF parallel test");
+    const path = await file("parallel.pdf", pdfBytes());
+    const args = { path, parent_item_key: parent.key };
+    const results = await Promise.all([
+      runTool("zotero_add_pdf_file", args),
+      runTool("zotero_add_pdf_file", args),
+    ]);
+    results.forEach(track);
+    assert.sameMembers(
+      results.map((r) => r.status),
+      ["attached", "already"],
+    );
+    assert.lengthOf(pdfChildren(parent), 1);
+  });
+
+  it("imports base64 bytes standalone into a collection", async function () {
+    const before = await tempLeftovers();
+    const bytes = pdfBytes();
+    const b64 = btoa(String.fromCharCode(...bytes));
+    const res = await runTool("zotero_add_pdf_file", {
+      content_base64: `data:application/pdf;base64,${b64}`,
+      filename: "Uploaded paper.pdf",
+      collection: `${ROOT}/PDF`,
+      recognize: false,
+    });
+    const att = track(res);
+    assert.isTrue(att.isPDFAttachment());
+    assert.isFalse(att.parentItemID);
+    assert.equal(res.collection.path, `${ROOT}/PDF`);
+    const coll = Zotero.Collections.getByLibraryAndKey(
+      att.libraryID,
+      res.collection.key,
+    ) as Zotero.Collection;
+    assert.isTrue(att.inCollection(coll.id));
+    assert.equal(att.attachmentFilename, "Uploaded paper.pdf");
+    assert.equal(await tempLeftovers(), before, "the temp file is removed");
+  });
+
+  it("rejects anything that isn't a single real PDF", async function () {
+    const parent = await parentItem("PDF reject test");
+    const html = await file("fake.pdf", new TextEncoder().encode("<html>"));
+    const txt = await file("notes.txt", pdfBytes());
+    const empty = await file("empty.pdf", new Uint8Array());
+    const good = await file("good.pdf", pdfBytes());
+    const cases: Array<[Record<string, unknown>, RegExp]> = [
+      [{ path: "relative/paper.pdf" }, /absolute/],
+      [{ path: PathUtils.join(dir, "missing.pdf") }, /No file/],
+      [{ path: dir }, /not a file/],
+      [{ path: txt }, /end in \.pdf/],
+      [{ path: html }, /not a PDF/],
+      [{ path: empty }, /empty/],
+      [{ content_base64: "%%%" }, /not valid base64/],
+      [{ content_base64: btoa("<html>") }, /not a PDF/],
+      [{ path: good, content_base64: btoa("x") }, /exactly one/],
+      [{}, /exactly one/],
+      [
+        { path: good, parent_item_key: parent.key, collection: ROOT },
+        /not both/,
+      ],
+    ];
+    for (const [args, msg] of cases) {
+      let err: unknown;
+      try {
+        await runTool("zotero_add_pdf_file", args);
+      } catch (e) {
+        err = e;
+      }
+      assert.instanceOf(err, ToolError, JSON.stringify(args));
+      assert.match((err as Error).message, msg, JSON.stringify(args));
+    }
+    assert.lengthOf(parent.getAttachments(), 0);
+  });
+
+  it("checks the base64 size before decoding", async function () {
+    const huge = "A".repeat(Math.ceil((MAX_PDF_BYTES * 4) / 3) + 8);
+    let err: unknown;
+    try {
+      await writeTempPDF(huge);
+    } catch (e) {
+      err = e;
+    }
+    assert.instanceOf(err, ToolError);
+    assert.match((err as Error).message, /larger than/);
+  });
+
+  it("logs a base64 upload by length, not content", async function () {
+    // Long enough to be shortened, as any real PDF is
+    const b64 = btoa(String.fromCharCode(...pdfBytes("x".repeat(300))));
+    const tool = TOOLS_BY_NAME.get("zotero_add_pdf_file")!;
+    const outcome = await runToolLogged(
+      tool,
+      { content_base64: b64, recognize: false },
+      fixtureClient(),
+      "rest",
+    );
+    assert.isTrue(outcome.ok);
+    track((outcome as any).value);
+    const entry = getEntries()[0];
+    assert.equal(entry.tool, "zotero_add_pdf_file");
+    assert.include(entry.args, `<${b64.length} chars>`);
+    assert.notInclude(entry.args, b64.slice(0, 40));
+  });
+
+  describe("from a URL", function () {
+    let api: any;
+    let original: any;
+    let seen: any[];
+
+    beforeEach(function () {
+      api = Zotero.Attachments;
+      original = api.downloadFirstAvailableFile;
+      seen = [];
+    });
+
+    afterEach(function () {
+      api.downloadFirstAvailableFile = original;
+    });
+    function stub(ok: boolean) {
+      api.downloadFirstAvailableFile = async (
+        resolvers: any[],
+        path: string,
+      ) => {
+        seen.push(...resolvers);
+        if (!ok) return false;
+        await IOUtils.write(path, pdfBytes());
+        return { url: "https://example.org/files/landing.pdf", props: {} };
+      };
+    }
+
+    it("follows a landing page for a parent item", async function () {
+      stub(true);
+      const parent = await parentItem("PDF URL test");
+      const res = await runTool("zotero_add_pdf_from_url", {
+        url: "https://example.org/article/123",
+        parent_item_key: parent.key,
+      });
+      track(res);
+      assert.equal(res.status, "attached");
+      assert.deepInclude(seen[0], {
+        pageURL: "https://example.org/article/123",
+      });
+      assert.lengthOf(pdfChildren(parent), 1);
+    });
+
+    it("saves a landing page's PDF standalone", async function () {
+      stub(true);
+      const before = await tempLeftovers();
+      const res = await runTool("zotero_add_pdf_from_url", {
+        url: "https://example.org/article/456",
+        recognize: false,
+      });
+      const att = track(res);
+      assert.isTrue(att.isPDFAttachment());
+      assert.equal(att.attachmentFilename, "landing.pdf");
+      assert.equal(await tempLeftovers(), before);
+    });
+
+    it("explains what to do when no PDF can be fetched", async function () {
+      stub(false);
+      const parent = await parentItem("PDF URL fail test");
+      for (const args of [
+        { url: "https://example.org/paywalled", parent_item_key: parent.key },
+        { url: "https://example.org/paywalled", recognize: false },
+      ]) {
+        let err: unknown;
+        try {
+          await runTool("zotero_add_pdf_from_url", args);
+        } catch (e) {
+          err = e;
+        }
+        assert.instanceOf(err, ToolError);
+        assert.match((err as Error).message, /zotero_add_pdf_file/);
+      }
+      assert.lengthOf(parent.getAttachments(), 0);
+    });
+  });
+});
+
 describe("tool annotations", function () {
   it("state destructiveHint on every write tool", function () {
     // MCP assumes destructive when a non-read-only tool leaves it out
@@ -408,9 +695,14 @@ describe("tool annotations", function () {
       "zotero_add_papers",
       "zotero_attach_pdf",
       "zotero_add_pdf_from_url",
+      "zotero_add_pdf_file",
     ]) {
       assert.isFalse(TOOLS_BY_NAME.get(name)!.annotations.destructiveHint);
     }
+    // A standalone import makes a new item each time
+    assert.isFalse(
+      TOOLS_BY_NAME.get("zotero_add_pdf_file")!.annotations.idempotentHint,
+    );
   });
 });
 

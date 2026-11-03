@@ -14,6 +14,7 @@ const INSTRUCTIONS = [
   "Semantic Scholar is limited to 1 request/second (shared by all calls; the server queues and retries), so prefer batch tools: s2_get_papers takes up to 500 ids, zotero_add_papers up to 25.",
   "Typical flow: s2_search_papers → zotero_add_papers with ids and a collection.",
   'Collections may be given by key or slash path ("Project/Reading"); zotero_add_papers creates missing collections and reuses items already in the library.',
+  "PDFs: zotero_add_papers and zotero_attach_pdf find open-access copies. For anything else, give zotero_add_pdf_from_url a PDF or landing-page URL, or, if you can download the file yourself, give zotero_add_pdf_file a local path or base64 bytes.",
 ].join(" ");
 
 type Reply = [number, Record<string, string>, string];

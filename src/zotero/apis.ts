@@ -15,14 +15,35 @@ interface AttachmentsAPI {
     item: Zotero.Item,
     resolvers: Array<UrlResolver | string | (() => Promise<UrlResolver[]>)>,
   ): Promise<Zotero.Item | false>;
-  importFromURL(options: {
-    libraryID: number;
-    url: string;
-    contentType?: string;
-    collections?: number[];
+  /** Copies (or with moveFile, moves) a local file into storage. Doesn't sniff content. */
+  importFromFile(options: {
+    file: string;
+    libraryID?: number;
     parentItemID?: number;
+    collections?: number[];
     title?: string;
+    fileBaseName?: string;
+    contentType?: string;
+    moveFile?: boolean;
   }): Promise<Zotero.Item>;
+  /**
+   * Saves the first resolver that yields a file to `path`. A `pageURL` that
+   * returns HTML is searched for its PDF link. Returns false if none worked.
+   */
+  downloadFirstAvailableFile(
+    resolvers: UrlResolver[],
+    path: string,
+    options: { enforceFileType?: boolean },
+  ): Promise<{ url: string; props: UrlResolver } | false>;
+  getFileBaseNameFromItem(
+    item: Zotero.Item,
+    options?: { attachmentTitle?: string },
+  ): string;
+}
+
+interface UtilitiesInternalAPI {
+  /** utilities_internal.js; false for a missing file. */
+  md5Async(path: string): Promise<string | false>;
 }
 
 interface RecognizeDocumentAPI {
@@ -32,6 +53,9 @@ interface RecognizeDocumentAPI {
 
 export const Attachments = (): AttachmentsAPI =>
   Zotero.Attachments as unknown as AttachmentsAPI;
+
+export const UtilitiesInternal = (): UtilitiesInternalAPI =>
+  (Zotero.Utilities as any).Internal as UtilitiesInternalAPI;
 
 export const RecognizeDocument = (): RecognizeDocumentAPI =>
   (Zotero as any).RecognizeDocument as RecognizeDocumentAPI;

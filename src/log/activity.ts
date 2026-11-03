@@ -14,10 +14,17 @@ const MAX_ENTRIES = 200;
 const entries: ActivityEntry[] = [];
 const listeners = new Set<() => void>();
 
+/** Long strings (e.g. a base64 PDF) are logged by length, never by content. */
+function shortenLong(_key: string, value: unknown): unknown {
+  return typeof value === "string" && value.length > 200
+    ? `<${value.length} chars>`
+    : value;
+}
+
 function summarizeArgs(args: unknown): string {
   let s: string;
   try {
-    s = JSON.stringify(args) ?? "";
+    s = JSON.stringify(args, shortenLong) ?? "";
   } catch {
     s = String(args);
   }
