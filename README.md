@@ -9,7 +9,7 @@ A Zotero 10 plugin that lets AI agents, and you, search [Semantic Scholar](https
 
 The plugin serves an **MCP endpoint from inside Zotero**, on Zotero's own local server, so there is no separate process to run. The same tools are also available as plain REST endpoints for scripts and `curl`.
 
-<!-- Screenshot: docs/images/hero.png -->
+<img src="docs/images/hero.png" alt="The Semantic Scholar search window" width="1100">
 
 ## Features
 
