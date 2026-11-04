@@ -1,13 +1,17 @@
 # Zotero S2
 
-[![CI](https://github.com/dingzy53/zotero-S2/actions/workflows/ci.yml/badge.svg)](https://github.com/dingzy53/zotero-S2/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/dingzy53/zotero-S2)](https://github.com/dingzy53/zotero-S2/releases/latest)
+[![Release](https://img.shields.io/github/v/release/dingzy53/zotero-S2)](https://github.com/dingzy53/zotero-S2/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/dingzy53/zotero-S2/total)](https://github.com/dingzy53/zotero-S2/releases)
 [![Zotero 10](https://img.shields.io/badge/Zotero-10-cc2936)](https://www.zotero.org/)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
 
 A Zotero 10 plugin that lets AI agents, and you, search [Semantic Scholar](https://www.semanticscholar.org/product/api) and file papers, with PDFs, into your Zotero collections.
 
 The plugin serves an **MCP endpoint from inside Zotero**, on Zotero's own local server, so there is no separate process to run. The same tools are also available as plain REST endpoints for scripts and `curl`.
+
+<!-- Screenshot: docs/images/hero.png -->
+
+## Features
 
 - **Search and explore:** relevance and boolean search, title matching, full-text snippets, citations and references, recommendations, authors.
 - **File papers:** add up to 25 papers per call to a collection, given by key or by slash path (`Project/Reading`). Missing collections are created. Papers already in your library are matched by DOI, arXiv id, S2 id or title + year, then reused rather than duplicated.
@@ -21,14 +25,16 @@ The plugin serves an **MCP endpoint from inside Zotero**, on Zotero's own local 
 - [Zotero 10](https://www.zotero.org/download/).
 - A Semantic Scholar API key. It's free: [request one here](https://www.semanticscholar.org/product/api#api-key-form). The plugin never sends unkeyed requests.
 
-## Install
+## Installation
 
-1. Download `zotero-s2.xpi` from the [latest release](https://github.com/dingzy53/zotero-S2/releases/latest).
-2. In Zotero, open **Tools → Plugins**, click the gear icon, choose **Install Plugin From File…** and pick the downloaded file.
-3. Open **Zotero → Settings → Zotero S2**. Paste your API key and click **Test**.
-4. Connect your agent (below).
+1. Download `zotero-s2.xpi` from the [latest release](https://github.com/dingzy53/zotero-S2/releases/latest). In Firefox, right-click the link and choose **Save Link As…**, or Firefox tries to install it as a browser add-on.
+2. In Zotero, open **Tools → Plugins**.
+3. Click the gear icon, choose **Install Plugin From File…** and select the downloaded file.
+4. Restart Zotero if it asks you to.
 
-Zotero checks for plugin updates automatically.
+**Update or remove:** Zotero updates the plugin on its own. To check now, or to remove the plugin, use **Tools → Plugins**.
+
+**Set up:** open **Edit → Settings** (**Zotero → Settings** on macOS) → **Zotero S2**, paste your API key and click **Test**. Then [connect your agent](#connect-an-agent).
 
 ## Connect an agent
 
@@ -115,7 +121,7 @@ Semantic Scholar allows an API key 1 request per second. Every caller shares one
 
 Failed requests (429, 5xx and network errors) are retried up to 6 times with exponential backoff: 1 s, 2 s, 4 s … capped at 60 s, plus up to 500 ms of jitter. If the server sends `Retry-After`, the plugin waits that long instead, up to 60 s; if it asks for longer, the call fails at once with a message saying how long to wait. Retries go back through the same queue. A 429 pauses the whole queue, not just the request that received it.
 
-## Security and privacy
+## Privacy and security
 
 - The endpoints answer only on Zotero's local server, which accepts `Host: 127.0.0.1`, `localhost` or `[::1]`.
 - Every request needs the bearer token. You can regenerate it in settings, which disconnects existing clients.
@@ -144,7 +150,7 @@ The plugin itself contacts nothing else, and it collects no telemetry. To report
 | "No Semantic Scholar API key set"          | Paste a key in settings and click **Test**. `zotero_find_in_library` still works without a key, matching only on the ids you give it.              |
 | Slow calls, or retries in the Activity log | Another program may be using the same API key, or S2 is busy. The plugin backs off on its own. Prefer batch tools, which use one request per call. |
 
-## Contributing
+## Development
 
 Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, tests and the release process.
 
