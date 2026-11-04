@@ -150,6 +150,6 @@ Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md
 
 ## License
 
-Copyright (C) 2026 dingzy53. Licensed under [AGPL-3.0-or-later](LICENSE). Built on [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template).
+Copyright (C) 2026 Ding Zheng Yuan. Licensed under [AGPL-3.0-or-later](LICENSE). Built on [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template).
 
 This is an independent project. It is not affiliated with or endorsed by Semantic Scholar, the Allen Institute for AI, Zotero, or the Corporation for Digital Scholarship.
