@@ -49,11 +49,27 @@ describe("settings pane", function () {
     const command = doc.getElementById(id("command")) as HTMLInputElement;
     assert.include(command.value, `Bearer ${saved}`);
 
+    // The stdio command points at a bridge file that startup has written
+    const stdio = doc.getElementById(id("command-stdio")) as HTMLInputElement;
+    assert.include(stdio.value, `-e ZOTERO_S2_TOKEN=${saved}`);
+    // The test Zotero isn't on the default port, so the URL is spelled out
+    assert.include(stdio.value, `-e ZOTERO_S2_URL=${endpoint.value}`);
+    const bridge = /-- node "(.+)"$/.exec(stdio.value)![1];
+    assert.isTrue(bridge.startsWith(Zotero.DataDirectory.dir));
+    // Startup writes it in the background
+    let script = "";
+    for (let i = 0; i < 50 && !script; i++) {
+      script = await IOUtils.readUTF8(bridge).catch(() => "");
+      if (!script) await Zotero.Promise.delay(100);
+    }
+    assert.include(script, "ZOTERO_S2_TOKEN");
+
     (doc.getElementById(id("regenerate")) as any).doCommand();
     const fresh = Zotero.Prefs.get(`${prefix}mcpToken`, true) as string;
     assert.notEqual(fresh, saved);
     assert.match(fresh, /^[0-9a-f]{64}$/);
     assert.equal(token.value, fresh);
+    assert.include(stdio.value, fresh);
 
     // Restore the fixed test token used by the HTTP checks
     Zotero.Prefs.set(`${prefix}mcpToken`, saved, true);

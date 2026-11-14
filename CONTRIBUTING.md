@@ -23,6 +23,7 @@ npm run build        # .scaffold/build/zotero-s2.xpi, then tsc --noEmit
 npm run lint:check   # prettier + eslint (lint:fix to apply)
 npm test             # mocha inside a real Zotero, in watch mode
 npx zotero-plugin test --no-watch --exit-on-finish   # one CI-style run
+npm run test:bridge  # the stdio bridge, in plain Node (no Zotero)
 ```
 
 Before opening a pull request, run `npm run build`, `npm run lint:check` and the CI-style test run. All three must pass.

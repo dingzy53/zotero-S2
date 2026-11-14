@@ -6,6 +6,7 @@ import {
   registerEndpoints,
   unregisterEndpoints,
 } from "./http/endpoints";
+import { installBridge } from "./modules/bridge";
 import { addFTL, registerMenu, removeFTL, unregisterMenu } from "./gui/menu";
 import {
   closeSearchWindows,
@@ -25,6 +26,8 @@ async function onStartup() {
   await registerPrefsPane();
   registerEndpoints();
   registerMenu();
+  // Only the stdio setup needs it; the plugin works without the file
+  installBridge().catch((e) => Zotero.logError(e as Error));
 
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),

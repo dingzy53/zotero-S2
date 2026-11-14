@@ -29,6 +29,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint:check
+      # The stdio bridge is plain Node: no Zotero needed
+      - run: npm run test:bridge
 
   build:
     runs-on: ubuntu-latest

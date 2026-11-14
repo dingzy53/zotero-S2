@@ -139,16 +139,33 @@ What leaves your machine:
 
 The plugin itself contacts nothing else, and it collects no telemetry. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
+### If Zotero often starts after your agent
+
+An MCP client connects to an HTTP server once, when its session starts. If Zotero isn't open at that moment, the tools are missing for the whole session, even after you open Zotero. In Claude Code you can run `/mcp` and reconnect `zotero-s2`. To avoid the problem altogether, connect through the **stdio bridge** instead. The settings pane has a second ready-made command for it:
+
+```sh
+claude mcp add zotero-s2 -e ZOTERO_S2_TOKEN=<token from settings> \
+  -- node "<Zotero data directory>/zotero-s2/zotero-s2-mcp.mjs"
+```
+
+The bridge is a small script with no dependencies (it needs Node.js 18 or later). The plugin keeps a current copy in your Zotero data directory. The client starts it, and it forwards every request to Zotero:
+
+- While Zotero is closed, the tools are still listed (from the list saved at the last successful call), and a tool call answers "Zotero isn't running; start it and retry".
+- Once Zotero is open, calls work. No reconnect is needed.
+
+It reads the token from `ZOTERO_S2_TOKEN`, and the endpoint from `ZOTERO_S2_URL` if Zotero doesn't use the default port. It only talks to `127.0.0.1`. Use either the HTTP command or the bridge, not both under the same name.
+
 ## Troubleshooting
 
-| Symptom                                    | Fix                                                                                                                                                |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Connection refused                         | Zotero isn't running, or the client uses the wrong port. The settings pane shows the actual endpoint.                                              |
-| `401`                                      | The token is missing or stale. Copy it again from settings, especially after clicking **Regenerate**.                                              |
-| `403 Origin not allowed`                   | The client runs in a browser. Use a desktop or CLI client, or a proxy.                                                                             |
-| `503`                                      | **Enable the MCP / REST server** is unchecked in settings.                                                                                         |
-| "No Semantic Scholar API key set"          | Paste a key in settings and click **Test**. `zotero_find_in_library` still works without a key, matching only on the ids you give it.              |
-| Slow calls, or retries in the Activity log | Another program may be using the same API key, or S2 is busy. The plugin backs off on its own. Prefer batch tools, which use one request per call. |
+| Symptom                                    | Fix                                                                                                                                                                        |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connection refused                         | Zotero isn't running, or the client uses the wrong port. The settings pane shows the actual endpoint.                                                                      |
+| Tools missing after starting Zotero        | Zotero wasn't running when the agent session started. In Claude Code, run `/mcp` and reconnect, or switch to the [stdio bridge](#if-zotero-often-starts-after-your-agent). |
+| `401`                                      | The token is missing or stale. Copy it again from settings, especially after clicking **Regenerate**.                                                                      |
+| `403 Origin not allowed`                   | The client runs in a browser. Use a desktop or CLI client, or a proxy.                                                                                                     |
+| `503`                                      | **Enable the MCP / REST server** is unchecked in settings.                                                                                                                 |
+| "No Semantic Scholar API key set"          | Paste a key in settings and click **Test**. `zotero_find_in_library` still works without a key, matching only on the ids you give it.                                      |
+| Slow calls, or retries in the Activity log | Another program may be using the same API key, or S2 is busy. The plugin backs off on its own. Prefer batch tools, which use one request per call.                         |
 
 ## Development
 
