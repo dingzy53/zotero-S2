@@ -30,4 +30,4 @@ pref-mcp-help = Any MCP client that supports Streamable HTTP can connect. Send t
 pref-log-title = Activity
 pref-log-clear =
     .label = Clear
-pref-help = { $name } { $version }
+pref-help = { $name } { $version } (built { $built })

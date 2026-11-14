@@ -21,6 +21,7 @@ const echo: ToolDef = {
 const handle = createMcpHandler({
   name: "Zotero S2",
   version: "test",
+  buildTime: "2026-01-02T03:04:05Z",
   instructions: "test instructions",
   tools: () => [echo],
   callTool: async (tool, args) =>
@@ -86,6 +87,11 @@ describe("MCP legacy era", function () {
       tools: { listChanged: false },
     });
     assert.equal(r.json.result.instructions, "test instructions");
+    assert.deepEqual(r.json.result.serverInfo, {
+      name: "Zotero S2",
+      version: "test",
+      buildTime: "2026-01-02T03:04:05Z",
+    });
   });
 
   it("falls back to the newest legacy version", async function () {
@@ -184,6 +190,7 @@ describe("MCP modern era (2026-07-28)", function () {
         "io.modelcontextprotocol/serverInfo": {
           name: "Zotero S2",
           version: "test",
+          buildTime: "2026-01-02T03:04:05Z",
         },
       });
     }

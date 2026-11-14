@@ -16,3 +16,6 @@ declare const rootURI: string;
 declare const addon: import("../src/addon").default;
 
 declare const __env__: "production" | "development";
+
+/** ISO time of the build, set by esbuild (zotero-plugin.config.ts). */
+declare const __buildTime__: string;

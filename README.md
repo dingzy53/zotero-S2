@@ -106,7 +106,7 @@ Every call appears in the **Activity** table in settings, with its duration, num
 
 Every path lives on Zotero's local server (`127.0.0.1:23119` by default), and every request needs `Authorization: Bearer <token>`.
 
-- `GET /s2/tools` lists the tools with their JSON Schemas.
+- `GET /s2/tools` lists the tools with their JSON Schemas, plus `server` (name, version and build time of the running plugin).
 - `POST /s2/tools/<name>` takes the tool's arguments as a JSON body and returns its JSON result. Errors come back as `400 {"error": …}`, and unknown tools as `404`.
 
 ```sh

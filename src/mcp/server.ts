@@ -45,6 +45,8 @@ export type McpResponse = [
 export interface McpServerOptions {
   name: string;
   version: string;
+  /** Tells apart two builds that carry the same version. */
+  buildTime?: string;
   instructions: string;
   tools: () => ToolDef[];
   callTool: (tool: ToolDef, args: unknown) => Promise<ToolOutcome>;
@@ -87,7 +89,11 @@ export function decodeHeaderValue(value: string): string {
 }
 
 export function createMcpHandler(opts: McpServerOptions) {
-  const serverInfo = { name: opts.name, version: opts.version };
+  const serverInfo = {
+    name: opts.name,
+    version: opts.version,
+    ...(opts.buildTime ? { buildTime: opts.buildTime } : {}),
+  };
   const serverMeta = { [META_SERVER_INFO]: serverInfo };
   const capabilities = { tools: { listChanged: false } };
 

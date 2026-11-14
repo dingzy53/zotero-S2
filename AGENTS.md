@@ -166,6 +166,8 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 
 - Addon ID `zotero-s2@dingzy53.github.io`. Changing it after release orphans installs and their prefs.
 - Repository `github.com/dingzy53/zotero-S2`. `update_url` points at its `release` tag's `update.json`. Moving the repo means every installed copy stops getting updates, and a wrong owner would let a third party serve them.
+- **Every release gets a new version number.** A change to `src/` or `addon/` reaches installed copies only through a version higher than the one they run: Zotero's updater compares versions, so a build re-released under an existing number never installs (this happened to `0.1.0`). Never re-tag, move or re-publish an existing version. `npm run release` does the bump; don't edit `version` in `package.json` by hand, or the release finds nothing to bump and tags nothing.
+- `serverInfo`, `GET /s2/tools` and the prefs pane show the build time (`src/utils/build.ts`) next to the version. Use it to check which build a Zotero is running.
 - Releases run only from the tag-push workflow (`release.yml`), which uses first-party GitHub actions only. Don't add third-party actions to a job that holds `contents: write`.
 
 ## Conventions

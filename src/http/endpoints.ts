@@ -1,4 +1,5 @@
-import { config, version } from "../../package.json";
+import { config } from "../../package.json";
+import { BUILD } from "../utils/build";
 import { getPref } from "../utils/prefs";
 import { S2Client } from "../s2/client";
 import { createMcpHandler } from "../mcp/server";
@@ -22,8 +23,9 @@ type Reply = [number, Record<string, string>, string];
 const s2 = new S2Client({ apiKey: () => getPref("apiKey") || "" });
 
 const mcp = createMcpHandler({
-  name: config.addonName,
-  version,
+  name: BUILD.name,
+  version: BUILD.version,
+  buildTime: BUILD.buildTime,
   instructions: INSTRUCTIONS,
   tools: () => TOOLS,
   callTool: (tool, args) => runTool(tool, args, s2, "mcp"),
@@ -106,6 +108,7 @@ const ENDPOINTS: Record<string, unknown> = {
   [MCP_PATH]: makeEndpoint(["GET", "POST", "DELETE"], (req) => mcp(req)),
   [TOOLS_PATH]: makeEndpoint(["GET"], async () =>
     json(200, {
+      server: BUILD,
       tools: TOOLS.map((t) => ({
         name: t.name,
         description: t.description,

@@ -1,11 +1,12 @@
 import { assert } from "chai";
-import { config } from "../package.json";
+import { config, version } from "../package.json";
 import { MODERN_VERSION } from "../src/mcp/server";
 import { TOOLS } from "../src/mcp/tools";
 
 // Set in zotero-plugin.config.ts → test.prefs
 const TOKEN = "test-token";
 const AUTH = { Authorization: `Bearer ${TOKEN}` };
+const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/;
 const JSON_TYPE = { "Content-Type": "application/json" };
 
 /** A real request through Zotero's local server, not the endpoint object. */
@@ -102,6 +103,10 @@ describe("HTTP MCP endpoint", function () {
       r.json.result._meta["io.modelcontextprotocol/serverInfo"].name,
       config.addonName,
     );
+    assert.match(
+      r.json.result._meta["io.modelcontextprotocol/serverInfo"].buildTime,
+      ISO_TIME,
+    );
   });
 
   it("rejects a modern tools/call whose Mcp-Name header doesn't match", async function () {
@@ -161,6 +166,9 @@ describe("HTTP REST mirror", function () {
       r.json.tools.map((t: any) => t.name),
       TOOLS.map((t) => t.name),
     );
+    // Which build is running: two builds can share a version
+    assert.equal(r.json.server.version, version);
+    assert.match(r.json.server.buildTime, ISO_TIME);
   });
 
   it("runs a tool, and reports bad names and arguments", async function () {

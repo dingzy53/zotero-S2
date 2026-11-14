@@ -1,6 +1,10 @@
 import { defineConfig } from "zotero-plugin-scaffold";
 import pkg from "./package.json";
 
+// One timestamp for the assets (`__buildTime__`) and the bundle, so "which
+// build is running?" has a single answer. In `npm start` it is the serve start.
+const buildTime = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+
 export default defineConfig({
   source: ["src", "addon"],
   dist: ".scaffold/build",
@@ -25,7 +29,7 @@ export default defineConfig({
       description: pkg.description,
       homepage: pkg.homepage,
       buildVersion: pkg.version,
-      buildTime: "{{buildTime}}",
+      buildTime,
     },
     prefs: {
       prefix: pkg.config.prefsPrefix,
@@ -35,6 +39,7 @@ export default defineConfig({
         entryPoints: ["src/index.ts"],
         define: {
           __env__: `"${process.env.NODE_ENV}"`,
+          __buildTime__: JSON.stringify(buildTime),
         },
         bundle: true,
         target: "firefox140",
