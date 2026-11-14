@@ -9,11 +9,21 @@ export interface UrlResolver {
   accessMethod?: string;
 }
 
+/**
+ * Zotero's resolver loop swallows request failures (it only writes them to
+ * the debug log) but reports each one here first. Return true to retry.
+ */
+export interface DownloadOptions {
+  enforceFileType?: boolean;
+  onRequestError?: (error: unknown) => boolean;
+}
+
 interface AttachmentsAPI {
   getFileResolvers(item: Zotero.Item, methods?: string[]): UrlResolver[];
   addFileFromURLs(
     item: Zotero.Item,
     resolvers: Array<UrlResolver | string | (() => Promise<UrlResolver[]>)>,
+    options?: Pick<DownloadOptions, "onRequestError">,
   ): Promise<Zotero.Item | false>;
   /** Copies (or with moveFile, moves) a local file into storage. Doesn't sniff content. */
   importFromFile(options: {
@@ -33,8 +43,10 @@ interface AttachmentsAPI {
   downloadFirstAvailableFile(
     resolvers: UrlResolver[],
     path: string,
-    options: { enforceFileType?: boolean },
+    options: DownloadOptions,
   ): Promise<{ url: string; props: UrlResolver } | false>;
+  /** Thrown (and passed to onRequestError) when a download isn't the expected type. */
+  InvalidPDFException: new () => Error;
   getFileBaseNameFromItem(
     item: Zotero.Item,
     options?: { attachmentTitle?: string },

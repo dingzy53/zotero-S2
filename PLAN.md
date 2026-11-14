@@ -108,6 +108,18 @@ Decision for the owner: ship the bridge, or only document `/mcp` reconnect. I re
 1. `importPDFFromURL()`: capture why the resolver failed (wrap `downloadFirstAvailableFile` and read the logged per-resolver error, or do one `HEAD`/small `GET` to classify: HTTP status, HTML, challenge page). Append it to the `ToolError`.
 2. Manually test HAL, PeerJ and one ACM open-access URL against a watch-mode Zotero and record the outcome in this file. If Zotero's resolver is the limit, say so in the tool description rather than adding our own scraper.
 
+Outcome of the manual test (2026-11-14, Zotero 10.0.6 test profile, URLs from the transcripts):
+
+| URL                                          | Result                                                                                                                                                        |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hal.science/hal-04257315/document` (HAL)    | Fails. HAL answers every request with an Anubis bot check ("Making sure you're not a bot!", HTTP 200). Zotero can't pass it. The error now says so.           |
+| `peerj.com/articles/cs-844.pdf` (PeerJ)      | Failed with HTTP 400 on a fresh profile; the landing page `peerj.com/articles/cs-844/` worked, and after it the direct link worked too (Cloudflare cookie).   |
+| `dl.acm.org/doi/pdf/10.1145/3679240.3735104` | Fails with HTTP 403. Same for `cell.com` and Wiley `pdfdirect`. These block automated downloads.                                                              |
+| `mdpi.com/1996-1073/19/10/2485/pdf` (MDPI)   | Failed, which was a regression from `da2377e`: MDPI sends the PDF as `application/octet-stream`, and a `pageURL` resolver skips that. Fixed; it attaches now. |
+| `osti.gov/servlets/purl/1848851` (OSTI)      | Works.                                                                                                                                                        |
+
+So Zotero's resolver is the limit for HAL, ACM, Cell and Wiley. We don't add a scraper; the tool description and the error point to `zotero_add_pdf_file`.
+
 ### Step 7: small fixes (finding 8)
 
 1. `s2_match_title`: return `{ match: null }` instead of throwing.

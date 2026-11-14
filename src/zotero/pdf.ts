@@ -3,6 +3,7 @@ import { S2Paper } from "../s2/types";
 import { ToolError, errorMessage } from "../mcp/errors";
 import {
   Attachments,
+  DownloadOptions,
   RecognizeDocument,
   UrlResolver,
   UtilitiesInternal,
@@ -298,34 +299,194 @@ function baseNameFromURL(url: string): string | undefined {
   }
 }
 
+/** One request failure from Zotero's resolver, in words an agent can act on. */
+function describeRequestError(e: unknown): string {
+  const err = e as { status?: number; url?: string; message?: string };
+  let host = "the site";
+  try {
+    if (err?.url) host = new URL(err.url).host;
+  } catch {
+    // Keep the generic name
+  }
+  if (e instanceof Attachments().InvalidPDFException) {
+    return "the download was not a PDF (usually an HTML login, cookie or bot-check page)";
+  }
+  switch (err?.status) {
+    case undefined:
+      return errorMessage(e);
+    case 0:
+      return `could not connect to ${host}`;
+    case 401:
+    case 403:
+      return `${host} refused the download (HTTP ${err.status}): it needs a login or blocks automated downloads`;
+    case 404:
+    case 410:
+      return `${host} has nothing at that address (HTTP ${err.status})`;
+    case 429:
+      return `${host} is rate-limiting downloads (HTTP 429)`;
+    default:
+      return `${host} answered HTTP ${err.status}`;
+  }
+}
+
+const BOT_CHECK =
+  /not a (ro)?bot|just a moment|captcha|are you (a )?(human|robot)|verif(y|ying) (you|that)|access denied|attention required|security check|checking your browser/i;
+
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
 /**
- * Downloads a direct PDF link or an article landing page. A `pageURL`
- * resolver does both: Zotero keeps a PDF response and otherwise looks for
- * the PDF link in the page (redirects, meta refresh, bot challenges).
+ * Zotero found no PDF and no request failed, so the site answered with a web
+ * page. One extra GET tells a bot check from an ordinary page without a PDF
+ * link, and both from a file sent with a type Zotero's page handling skips
+ * (`file`). Best effort: `null` when that can't be told.
  */
+async function probePage(
+  url: string,
+): Promise<{ reason: string; file: boolean } | null> {
+  try {
+    const xhr = await Zotero.HTTP.request("GET", url, {
+      responseType: "text",
+      successCodes: false,
+      errorDelayMax: 0,
+      timeout: 15_000,
+    } as any);
+    const host = new URL(xhr.responseURL || url).host;
+    const type = xhr.getResponseHeader("Content-Type") ?? "";
+    if (!/html/i.test(type)) {
+      return {
+        reason: `${host} answered HTTP ${xhr.status}${type ? ` (${type.split(";")[0]})` : ""}, but not with a PDF`,
+        file: xhr.status >= 200 && xhr.status < 300,
+      };
+    }
+    const html = String(xhr.response ?? "").slice(0, 20_000);
+    const title = decodeEntities(
+      /<title[^>]*>([^<]{1,120})/i.exec(html)?.[1] ?? "",
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    const named = title ? ` ("${title}")` : "";
+    return {
+      reason: BOT_CHECK.test(title)
+        ? `${host} answered with a bot check${named} that Zotero can't pass`
+        : `${host} answered with a web page${named} on which Zotero found no PDF link; it may need a login`,
+      file: false,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Test seam: the probe is a real request, and unit tests stay offline. */
+export const pdfDeps = { probePage };
+
+/**
+ * Records why Zotero's resolver gave up. Without this the reason only
+ * reaches the debug log, and every failure reads the same to the agent.
+ */
+function failureLog() {
+  const reasons: string[] = [];
+  const add = (reason: string) => {
+    if (!reasons.includes(reason)) reasons.push(reason);
+  };
+  return {
+    add,
+    reasons,
+    options: {
+      onRequestError(e: unknown) {
+        add(describeRequestError(e));
+        // false: don't retry. Same as Zotero without a handler
+        return false;
+      },
+    },
+    error(): ToolError {
+      const why = reasons.length
+        ? reasons.join("; ")
+        : "the page loaded, but no PDF link was found on it (it may be paywalled, need a login, or show a bot check)";
+      return new ToolError(
+        `Could not get a PDF from that URL: ${why}. If this was a direct PDF link, the article's landing page sometimes works instead. If you can download the file yourself, pass it to zotero_add_pdf_file.`,
+      );
+    },
+  };
+}
+
+/** Zotero downloads over https only; a local file needs the other tool. */
+function checkDownloadURL(url: string): void {
+  if (/^file:\/\//i.test(url)) {
+    let path = "";
+    try {
+      path = decodeURIComponent(new URL(url).pathname);
+    } catch {
+      // Leave the path out of the message
+    }
+    throw new ToolError(
+      `That is a local file, not a download. Use zotero_add_pdf_file${path ? ` with path "${path}"` : " with its path"}.`,
+    );
+  }
+  if (!/^https?:\/\//i.test(url)) throw new ToolError("url must be http(s)");
+  if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/i.test(url)) {
+    throw new ToolError(
+      "Zotero can't download from a server on this computer. For a PDF that is already on disk, use zotero_add_pdf_file with its path.",
+    );
+  }
+}
+
+/**
+ * Runs Zotero's resolver on the URL and explains a failure. `download` gets
+ * the resolvers and Zotero's options, and returns false when nothing came.
+ *
+ * A `pageURL` resolver handles a direct PDF and an article page alike: Zotero
+ * keeps a PDF response and otherwise looks for the PDF link in the page
+ * (redirects, meta refresh, bot challenges). It only skips a file sent with
+ * another content type (MDPI sends `application/octet-stream`), so when a
+ * look at the URL shows that, a plain file download is tried as well.
+ */
+async function resolveFromURL<T>(
+  url: string,
+  download: (
+    resolvers: UrlResolver[],
+    options: Pick<DownloadOptions, "onRequestError">,
+  ) => Promise<T | false>,
+): Promise<T> {
+  const failure = failureLog();
+  const attempt = async (resolver: UrlResolver) => {
+    try {
+      return await downloads.run(() => download([resolver], failure.options));
+    } catch (e) {
+      failure.add(errorMessage(e));
+      return false;
+    }
+  };
+  let got = await attempt({ pageURL: url, accessMethod: "URL" });
+  // No request failed, yet no PDF: see what the site sent instead
+  if (!got && !failure.reasons.length) {
+    const seen = await pdfDeps.probePage(url);
+    if (seen?.file) got = await attempt({ url, accessMethod: "URL" });
+    if (!got && seen && !failure.reasons.length) failure.add(seen.reason);
+  }
+  if (!got) throw failure.error();
+  return got;
+}
+
+/** Downloads a direct PDF link or an article landing page into Zotero. */
 export async function importPDFFromURL(
   url: string,
   target: PdfTarget,
 ): Promise<ImportResult> {
-  if (!/^https?:\/\//i.test(url)) throw new ToolError("url must be http(s)");
-  const resolvers: UrlResolver[] = [{ pageURL: url, accessMethod: "URL" }];
-  const failed = new ToolError(
-    "Could not get a PDF from that URL (it may be paywalled, need a login, or block automated downloads). " +
-      "If you can download the file yourself, pass it to zotero_add_pdf_file.",
-  );
+  checkDownloadURL(url);
 
   if ("parent" in target) {
     // Zotero names, records and saves the attachment the same way as Find Available PDF
-    let att: Zotero.Item | false;
-    try {
-      att = await downloads.run(() =>
-        Attachments().addFileFromURLs(target.parent, resolvers),
-      );
-    } catch (e) {
-      Zotero.debug(`[Zotero S2] PDF download failed: ${errorMessage(e)}`);
-      throw failed;
-    }
-    if (!att) throw failed;
+    const att = await resolveFromURL(url, (resolvers, options) =>
+      Attachments().addFileFromURLs(target.parent, resolvers, options),
+    );
     return {
       status: "attached",
       attachmentKey: att.key,
@@ -334,26 +495,19 @@ export async function importPDFFromURL(
   }
 
   const tmp = tempPDFPath();
-  let got: Awaited<
-    ReturnType<ReturnType<typeof Attachments>["downloadFirstAvailableFile"]>
-  >;
   try {
-    got = await downloads.run(() =>
+    const got = await resolveFromURL(url, (resolvers, options) =>
       Attachments().downloadFirstAvailableFile(resolvers, tmp, {
         enforceFileType: true,
+        ...options,
       }),
     );
-  } catch (e) {
+    return await importPDFFile(tmp, target, {
+      ownTemp: true,
+      fileBaseName: baseNameFromURL(got.url) ?? baseNameFromURL(url),
+    });
+  } finally {
+    // importPDFFile moves the file in; this covers a failed download
     await IOUtils.remove(tmp, { ignoreAbsent: true });
-    Zotero.debug(`[Zotero S2] PDF download failed: ${errorMessage(e)}`);
-    throw failed;
   }
-  if (!got) {
-    await IOUtils.remove(tmp, { ignoreAbsent: true });
-    throw failed;
-  }
-  return importPDFFile(tmp, target, {
-    ownTemp: true,
-    fileBaseName: baseNameFromURL(got.url) ?? baseNameFromURL(url),
-  });
 }

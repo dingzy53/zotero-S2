@@ -7,7 +7,7 @@ import { RateLimiter } from "../src/s2/rateLimiter";
 import { S2Paper, newStats } from "../src/s2/types";
 import { resolveCollection } from "../src/zotero/collections";
 import { createItem } from "../src/zotero/importer";
-import { MAX_PDF_BYTES, writeTempPDF } from "../src/zotero/pdf";
+import { MAX_PDF_BYTES, pdfDeps, writeTempPDF } from "../src/zotero/pdf";
 import { getEntries } from "../src/log/activity";
 import { runTool as runToolLogged } from "../src/mcp/runTool";
 import { ATTENTION, DEEP_LEARNING, ARXIV_ONLY } from "./fixtures";
@@ -888,22 +888,32 @@ describe("adding PDF files", function () {
     let api: any;
     let original: any;
     let seen: any[];
+    // What a look at the failing page would find (a real request otherwise)
+    let page: { reason: string; file: boolean } | null;
+    let probePage: typeof pdfDeps.probePage;
 
     beforeEach(function () {
+      probePage = pdfDeps.probePage;
       api = Zotero.Attachments;
       original = api.downloadFirstAvailableFile;
       seen = [];
+      page = null;
+      pdfDeps.probePage = async () => page;
     });
 
     afterEach(function () {
       api.downloadFirstAvailableFile = original;
+      pdfDeps.probePage = probePage;
     });
-    function stub(ok: boolean) {
+    function stub(ok: boolean, errors: unknown[] = []) {
       api.downloadFirstAvailableFile = async (
         resolvers: any[],
         path: string,
+        options: any,
       ) => {
         seen.push(...resolvers);
+        // Zotero reports each failed request, then carries on
+        for (const e of errors) assert.isFalse(options.onRequestError(e));
         if (!ok) return false;
         await IOUtils.write(path, pdfBytes());
         return { url: "https://example.org/files/landing.pdf", props: {} };
@@ -955,6 +965,92 @@ describe("adding PDF files", function () {
         assert.match((err as Error).message, /zotero_add_pdf_file/);
       }
       assert.lengthOf(parent.getAttachments(), 0);
+    });
+
+    it("says why the download failed", async function () {
+      const fail = async (errors: unknown[]) => {
+        stub(false, errors);
+        const err = await runTool("zotero_add_pdf_from_url", {
+          url: "https://example.org/paper",
+          recognize: false,
+        }).catch((e) => e);
+        assert.instanceOf(err, ToolError);
+        return (err as Error).message;
+      };
+      const status = (code: number) => ({
+        status: code,
+        url: "https://dl.example.org/doi/pdf/10.1/x",
+        message: `HTTP GET failed with status code ${code}`,
+      });
+      assert.match(
+        await fail([status(403)]),
+        /dl\.example\.org refused the download \(HTTP 403\).*zotero_add_pdf_file/,
+      );
+      assert.match(await fail([status(404)]), /nothing at that address/);
+      assert.match(await fail([status(503)]), /answered HTTP 503/);
+      assert.match(
+        await fail([new (Zotero.Attachments as any).InvalidPDFException()]),
+        /was not a PDF/,
+      );
+      // The same reason twice is said once
+      const twice = await fail([status(403), status(403)]);
+      assert.lengthOf(twice.match(/HTTP 403/g)!, 1);
+      // No request failed: the site sent a page instead, so we look at it
+      page = { reason: "hal.example answered with a bot check", file: false };
+      seen.length = 0;
+      assert.include(await fail([]), page.reason);
+      assert.lengthOf(seen, 1, "a bot check is not downloaded again");
+      // A request error already explains it; no extra request then
+      page = { reason: "not used", file: false };
+      assert.notInclude(await fail([status(403)]), "not used");
+      page = null;
+      assert.match(await fail([]), /no PDF link was found/);
+    });
+
+    it("downloads a file the site sends with another content type", async function () {
+      // Zotero's page handling skips it; the plain download then gets it
+      api.downloadFirstAvailableFile = async (
+        resolvers: any[],
+        path: string,
+      ) => {
+        seen.push(...resolvers);
+        if (!resolvers[0].url) return false;
+        await IOUtils.write(path, pdfBytes());
+        return { url: resolvers[0].url, props: {} };
+      };
+      page = { reason: "sent application/octet-stream", file: true };
+      const res = await runTool("zotero_add_pdf_from_url", {
+        url: "https://example.org/1/2/pdf",
+        recognize: false,
+      });
+      assert.isTrue(track(res).isPDFAttachment());
+      assert.deepEqual(
+        seen.map((r) => Object.keys(r)[0]),
+        ["pageURL", "url"],
+      );
+    });
+
+    it("sends local files and local servers to zotero_add_pdf_file", async function () {
+      stub(true);
+      const file = await runTool("zotero_add_pdf_from_url", {
+        url: "file:///home/me/My%20Papers/a.pdf",
+      }).catch((e) => e);
+      assert.instanceOf(file, ToolError);
+      assert.include(
+        file.message,
+        'zotero_add_pdf_file with path "/home/me/My Papers/a.pdf"',
+      );
+      for (const url of [
+        "http://localhost:8765/a.pdf",
+        "http://127.0.0.1:8765/a.pdf",
+      ]) {
+        const local = await runTool("zotero_add_pdf_from_url", { url }).catch(
+          (e) => e,
+        );
+        assert.instanceOf(local, ToolError);
+        assert.match(local.message, /zotero_add_pdf_file with its path/);
+      }
+      assert.lengthOf(seen, 0, "nothing was downloaded");
     });
   });
 });

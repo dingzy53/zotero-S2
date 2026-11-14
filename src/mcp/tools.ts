@@ -989,7 +989,7 @@ export const TOOLS: ToolDef[] = [
     name: "zotero_add_pdf_from_url",
     title: "Add a PDF from a URL",
     description:
-      "Download a PDF into Zotero. Works with direct PDF links and with article landing pages (Zotero follows the page to its PDF). With parent_item_key it is attached to that item; otherwise it is saved standalone (optionally into a collection) and Zotero's metadata recognizer creates a parent item. If the site blocks the download, fetch the file yourself and use zotero_add_pdf_file.",
+      "Download a PDF into Zotero. Works with direct PDF links and with article landing pages (Zotero follows the page to its PDF). With parent_item_key it is attached to that item; otherwise it is saved standalone (optionally into a collection) and Zotero's metadata recognizer creates a parent item. Many publisher sites refuse automated downloads; the error then says what the site answered. If so, or if the PDF is already on disk, fetch the file yourself and use zotero_add_pdf_file.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1009,8 +1009,6 @@ export const TOOLS: ToolDef[] = [
     },
     async handler(args) {
       const lib = resolveLibraryID(args.library_id, true);
-      if (!/^https?:\/\//i.test(args.url))
-        throw new ToolError("url must be http(s)");
       return importPDFFromURL(args.url, await pdfTarget(lib, args));
     },
   },
