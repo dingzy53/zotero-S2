@@ -43,7 +43,7 @@ import {
   importPDFFromURL,
   writeTempPDF,
 } from "../zotero/pdf";
-import { s2ToZotero } from "../zotero/s2ToZotero";
+import { classifyItemType, s2ToZotero } from "../zotero/s2ToZotero";
 import { libraryWrites } from "../zotero/writeLock";
 import { ToolError, errorMessage } from "./errors";
 import { JSONSchema } from "./schema";
@@ -228,6 +228,23 @@ function isSameWork(item: Zotero.Item, paper: S2Paper): boolean {
   if (!title || title !== normalizeTitle(paper.title ?? "")) return false;
   const year = itemYear(item);
   return !year || !paper.year || year === paper.year;
+}
+
+/**
+ * Sets the item's type to the one S2's data points to. Skipped when that type
+ * is only the fallback guess: "journal article" for a paper S2 knows little
+ * about must not overwrite a type someone chose.
+ */
+function fixItemType(
+  item: Zotero.Item,
+  paper: S2Paper,
+): { from: string; to: string } | null {
+  const { itemType: to, certain } = classifyItemType(paper);
+  const from = Zotero.ItemTypes.getName(item.itemTypeID);
+  const typeID = Zotero.ItemTypes.getID(to);
+  if (!certain || to === from || !typeID) return null;
+  item.setType(typeID);
+  return { from, to };
 }
 
 // --- tools ---
@@ -1058,7 +1075,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "zotero_enrich_items",
     title: "Enrich items from Semantic Scholar",
-    description: `Match up to ${MAX_ADD} existing Zotero items on Semantic Scholar (by S2 id, DOI, arXiv, else an exact title with no conflicting year) and fill in missing fields (abstract, date, venue, DOI, authors). Records the S2 id in Extra. With overwrite=true existing values are replaced.`,
+    description: `Match up to ${MAX_ADD} existing Zotero items on Semantic Scholar (by S2 id, DOI, arXiv, else an exact title with no conflicting year) and fill in missing fields (abstract, date, venue, DOI, authors). Records the S2 id in Extra. With overwrite=true existing values are replaced. With fix_item_type=true an item whose type is wrong (e.g. a conference paper saved as a journal article) is changed to the right one.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -1070,13 +1087,19 @@ export const TOOLS: ToolDef[] = [
           maxItems: MAX_ADD,
         },
         overwrite: { type: "boolean", default: false },
+        fix_item_type: {
+          type: "boolean",
+          default: false,
+          description:
+            "Change the item type when Semantic Scholar's data clearly shows another one (journal article ↔ conference paper, preprint, book…). Zotero drops fields the new type doesn't have. The change is reported as itemType: { from, to }.",
+        },
         library_id: libraryID,
       },
       required: ["item_keys"],
     },
     annotations: {
       readOnlyHint: false,
-      // overwrite=true replaces existing field values
+      // overwrite=true replaces existing field values; fix_item_type can drop some
       destructiveHint: true,
       idempotentHint: true,
       openWorldHint: true,
@@ -1093,13 +1116,16 @@ export const TOOLS: ToolDef[] = [
           results.push({ itemKey: item.key, matched: false });
           continue;
         }
+        // Before the fields: they are checked against the item's type
+        const retyped = args.fix_item_type ? fixItemType(item, paper) : null;
         const changed = applyMapped(item, s2ToZotero(paper), !args.overwrite);
-        if (changed.length) await item.saveTx();
+        if (changed.length || retyped) await item.saveTx();
         results.push({
           itemKey: item.key,
           matched: true,
           paperId: paper.paperId,
           changed,
+          ...(retyped && { itemType: retyped }),
         });
       }
       return { results };

@@ -116,6 +116,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 **Zotero data**
 
 - Item metadata from S2 always writes `S2 Paper ID:` and `CorpusID:` lines into Extra, using `mergeExtra`, which never overwrites existing keys. Dedupe depends on these lines.
+- `classifyItemType()` says whether its type rests on evidence (`certain`) or is the `journalArticle` fallback. `zotero_enrich_items` with `fix_item_type` changes an existing item's type only on evidence. The venue-name heuristic applies only when S2 gives no type, and never matches "Proceedings" alone (PNAS, "Proceedings of the IEEE" are journals).
 - `zotero_enrich_items` defaults to filling **only empty** fields. Writing a field the item type doesn't support is skipped (`isValidField`).
 - A title match from S2 is used only when the normalized titles are equal and the years don't conflict (`isSameWork`). S2 returns its closest title even for a different paper, and a wrong match would leave an `S2 Paper ID:` in Extra that later lookups and dedupe trust.
 - A DOI or arXiv id that S2 doesn't have is still added: `zotero_add_papers` looks for an existing item by that id, then calls `createFromTranslator()`, whatever `metadata_source` says. Such an item has no `S2 Paper ID:` line.

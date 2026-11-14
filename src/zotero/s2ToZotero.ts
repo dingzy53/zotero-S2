@@ -73,17 +73,58 @@ function isArxivOnly(p: S2Paper): boolean {
   return !venue.trim() || /arxiv/i.test(venue);
 }
 
-export function chooseItemType(p: S2Paper): string {
+/**
+ * IEEE gives conference papers a DOI with the conference's record number
+ * after its acronym (`10.1109/CVPR52688.2022.01234`); journal DOIs have the
+ * acronym alone (`10.1109/TPWRS.2020.2971234`).
+ */
+const IEEE_CONFERENCE_DOI = /^10\.1109\/[a-z][a-z-]*\d{4,6}\.(?:19|20)\d\d\./i;
+
+/**
+ * Venue words that mean a conference. "Proceedings" is left out on purpose:
+ * "Proceedings of the IEEE", PNAS and many others are journals.
+ */
+const CONFERENCE_VENUE =
+  /\b(conference|symposium|workshop|congress|colloquium|meeting)\b/i;
+
+export interface ItemTypeChoice {
+  itemType: string;
+  /**
+   * False when nothing pointed to a type and `journalArticle` is only the
+   * fallback. An existing item's type is never changed on that basis.
+   */
+  certain: boolean;
+}
+
+export function classifyItemType(p: S2Paper): ItemTypeChoice {
   const types = p.publicationTypes ?? [];
   const venueType = p.publicationVenue?.type?.toLowerCase();
-  if (types.includes("Book")) return "book";
-  if (types.includes("BookSection")) return "bookSection";
-  if (types.includes("Dataset")) return "dataset";
-  if (isArxivOnly(p)) return "preprint";
+  const sure = (itemType: string) => ({ itemType, certain: true });
+  if (types.includes("Book")) return sure("book");
+  if (types.includes("BookSection")) return sure("bookSection");
+  if (types.includes("Dataset")) return sure("dataset");
+  if (isArxivOnly(p)) return sure("preprint");
   if (types.includes("Conference") || venueType === "conference") {
-    return "conferencePaper";
+    return sure("conferencePaper");
   }
-  return "journalArticle";
+  // S2 files many IEEE proceedings papers as journal articles, or leaves the
+  // type empty. This DOI shape is specific enough to overrule that
+  if (IEEE_CONFERENCE_DOI.test(p.externalIds?.DOI ?? "")) {
+    return sure("conferencePaper");
+  }
+  if (types.includes("JournalArticle") || venueType === "journal") {
+    return sure("journalArticle");
+  }
+  // S2 says nothing about the type: go by the venue's name
+  const venue = [p.venue, p.publicationVenue?.name, p.journal?.name]
+    .filter(Boolean)
+    .join(" ");
+  if (CONFERENCE_VENUE.test(venue)) return sure("conferencePaper");
+  return { itemType: "journalArticle", certain: false };
+}
+
+export function chooseItemType(p: S2Paper): string {
+  return classifyItemType(p).itemType;
 }
 
 export function s2ToZotero(p: S2Paper): MappedItem {

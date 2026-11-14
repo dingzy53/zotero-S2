@@ -1,5 +1,11 @@
 import { assert } from "chai";
-import { mergeExtra, s2ToZotero, splitName } from "../src/zotero/s2ToZotero";
+import {
+  classifyItemType,
+  mergeExtra,
+  s2ToZotero,
+  splitName,
+} from "../src/zotero/s2ToZotero";
+import type { S2Paper } from "../src/s2/types";
 import { parseIdentifier } from "../src/zotero/identifiers";
 import { compactSnippet } from "../src/s2/fields";
 import { ARXIV_ONLY, ATTENTION, DEEP_LEARNING } from "./fixtures";
@@ -49,6 +55,113 @@ describe("s2ToZotero", function () {
       lastName: "van Beethoven",
       creatorType: "author",
     });
+  });
+});
+
+// [what it is, paper, expected type, certain]
+const TYPE_CASES: Array<[string, Omit<S2Paper, "paperId">, string, boolean]> = [
+  [
+    // Saved as a journal article before; S2 had no type for it
+    "IEEE conference DOI, no type from S2",
+    {
+      externalIds: { DOI: "10.1109/ICPSAsia55496.2022.9949832" },
+      venue:
+        "2022 IEEE/IAS Industrial and Commercial Power System Asia (I&CPS Asia)",
+      publicationTypes: null,
+    },
+    "conferencePaper",
+    true,
+  ],
+  [
+    "IEEE conference DOI that S2 files as a journal article",
+    {
+      externalIds: { DOI: "10.1109/PESGM58988.2026.11693499" },
+      venue: "IEEE Power & Energy Society General Meeting",
+      publicationTypes: ["JournalArticle"],
+    },
+    "conferencePaper",
+    true,
+  ],
+  [
+    "IEEE journal DOI",
+    {
+      externalIds: { DOI: "10.1109/TPWRS.2020.2971234" },
+      venue: "IEEE Transactions on Power Systems",
+      publicationTypes: null,
+    },
+    "journalArticle",
+    false,
+  ],
+  [
+    "a journal with Proceedings in its name",
+    {
+      externalIds: { DOI: "10.1109/JPROC.2015.2494218" },
+      venue: "Proceedings of the IEEE",
+      publicationTypes: [],
+    },
+    "journalArticle",
+    false,
+  ],
+  [
+    "conference venue name, no type from S2",
+    {
+      venue: "International Conference on Machine Learning",
+      publicationTypes: null,
+    },
+    "conferencePaper",
+    true,
+  ],
+  [
+    "workshop named only in publicationVenue",
+    {
+      publicationVenue: {
+        name: "NeurIPS Workshop on Tackling Climate Change",
+      },
+    },
+    "conferencePaper",
+    true,
+  ],
+  [
+    // The venue name is only consulted when S2 is silent
+    "S2 says journal article, venue mentions a symposium",
+    {
+      venue: "Symposium on Theory of Computing Review",
+      publicationTypes: ["JournalArticle"],
+    },
+    "journalArticle",
+    true,
+  ],
+  [
+    "S2 venue type journal",
+    { publicationVenue: { name: "Nature", type: "journal" } },
+    "journalArticle",
+    true,
+  ],
+  ["nothing known", {}, "journalArticle", false],
+  [
+    "S2 type Conference",
+    { publicationTypes: ["JournalArticle", "Conference"] },
+    "conferencePaper",
+    true,
+  ],
+  ["book", { publicationTypes: ["Book"] }, "book", true],
+];
+
+describe("classifyItemType", function () {
+  for (const [label, p, itemType, certain] of TYPE_CASES) {
+    it(`${label} → ${itemType}`, function () {
+      assert.deepEqual(classifyItemType({ paperId: "x", ...p }), {
+        itemType,
+        certain,
+      });
+    });
+  }
+
+  it("maps a detected conference paper's venue to proceedingsTitle", function () {
+    const m = s2ToZotero({ paperId: "x", ...TYPE_CASES[0][1] });
+    assert.equal(m.itemType, "conferencePaper");
+    assert.match(m.fields.proceedingsTitle, /Power System Asia/);
+    assert.isUndefined(m.fields.publicationTitle);
   });
 });
 

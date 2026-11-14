@@ -4,7 +4,7 @@ import { ToolError } from "../src/mcp/errors";
 import { prepareArgs } from "../src/mcp/schema";
 import { S2Client } from "../src/s2/client";
 import { RateLimiter } from "../src/s2/rateLimiter";
-import { newStats } from "../src/s2/types";
+import { S2Paper, newStats } from "../src/s2/types";
 import { resolveCollection } from "../src/zotero/collections";
 import { createItem } from "../src/zotero/importer";
 import { MAX_PDF_BYTES, writeTempPDF } from "../src/zotero/pdf";
@@ -552,6 +552,73 @@ describe("zotero_enrich_items", function () {
       item.getField("extra") as string,
       `S2 Paper ID: ${DEEP_LEARNING.paperId}`,
     );
+  });
+
+  it("fixes a wrong item type only when asked, and only on evidence", async function () {
+    const ieee: S2Paper = {
+      paperId: "f".repeat(40),
+      corpusId: 999999002,
+      externalIds: { DOI: "10.1109/ICPSAsia55496.2022.9949832" },
+      title: "A Conference Paper Saved as a Journal Article",
+      venue: "IEEE/IAS Industrial and Commercial Power System Asia",
+      year: 2022,
+      authors: [{ authorId: "1", name: "Ada Lovelace" }],
+      publicationTypes: null,
+    };
+    // S2 knows nothing about this one's type: journalArticle is a guess
+    const vague: S2Paper = {
+      paperId: "e".repeat(40),
+      externalIds: { DOI: "10.9999/vague" },
+      title: "A Book Chapter S2 Knows Little About",
+    };
+    const enrich = (item: Zotero.Item, fix: boolean) => {
+      const tool = TOOLS_BY_NAME.get("zotero_enrich_items")!;
+      return tool.handler(
+        prepareArgs(tool.inputSchema, {
+          item_keys: [item.key],
+          fix_item_type: fix,
+        }),
+        context(fixtureClient([ieee, vague])),
+      ) as Promise<any>;
+    };
+    const typeOf = (item: Zotero.Item) =>
+      Zotero.ItemTypes.getName(item.itemTypeID);
+
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", ieee.title!);
+    item.setField("DOI", ieee.externalIds!.DOI!);
+    item.setField("publicationTitle", ieee.venue!);
+    await item.saveTx();
+    const chapter = new Zotero.Item("bookSection");
+    chapter.setField("title", vague.title!);
+    chapter.setField("extra", `DOI: ${vague.externalIds!.DOI}`);
+    await chapter.saveTx();
+    try {
+      const untouched = await enrich(item, false);
+      assert.isUndefined(untouched.results[0].itemType);
+      assert.equal(typeOf(item), "journalArticle");
+
+      const fixed = await enrich(item, true);
+      assert.deepEqual(fixed.results[0].itemType, {
+        from: "journalArticle",
+        to: "conferencePaper",
+      });
+      assert.equal(typeOf(item), "conferencePaper");
+      // Zotero carries the venue over to the new type's field
+      assert.equal(item.getField("proceedingsTitle"), ieee.venue);
+      assert.equal(item.getField("DOI"), ieee.externalIds!.DOI);
+
+      const again = await enrich(item, true);
+      assert.isUndefined(again.results[0].itemType, "idempotent");
+
+      const kept = await enrich(chapter, true);
+      assert.isTrue(kept.results[0].matched);
+      assert.isUndefined(kept.results[0].itemType);
+      assert.equal(typeOf(chapter), "bookSection");
+    } finally {
+      await item.eraseTx();
+      await chapter.eraseTx();
+    }
   });
 
   it("matches an item without ids by its title", async function () {
