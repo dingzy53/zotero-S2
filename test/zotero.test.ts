@@ -35,6 +35,44 @@ async function runTool(
   )) as any;
 }
 
+/**
+ * Offline stand-in for Zotero's DOI/arXiv lookup. `lookup` gets the
+ * identifier and returns a title, or `null` for "no translator knows it".
+ */
+async function withTranslator<T>(
+  lookup: (identifier: { DOI?: string; arXiv?: string }) => string | null,
+  run: () => Promise<T>,
+): Promise<T> {
+  const translate = Zotero.Translate as any;
+  const original = translate.Search;
+  translate.Search = class {
+    private title: string | null = null;
+    private doi?: string;
+    setIdentifier(identifier: { DOI?: string; arXiv?: string }) {
+      this.title = lookup(identifier);
+      this.doi = identifier.DOI;
+    }
+    async getTranslators() {
+      return this.title === null ? [] : [{}];
+    }
+    setTranslator() {}
+    async translate(opts: { libraryID: number; collections: number[] }) {
+      const item = new Zotero.Item("journalArticle");
+      item.libraryID = opts.libraryID;
+      item.setField("title", this.title!);
+      if (this.doi) item.setField("DOI", this.doi);
+      if (opts.collections) item.setCollections(opts.collections);
+      await item.saveTx();
+      return [item];
+    }
+  };
+  try {
+    return await run();
+  } finally {
+    translate.Search = original;
+  }
+}
+
 describe("collections", function () {
   it("creates a nested path once and then reuses it", async function () {
     const lib = Zotero.Libraries.userLibraryID;
@@ -87,7 +125,8 @@ describe("zotero_add_papers", function () {
         ids: [
           "ARXIV:1706.03762",
           "DOI:10.1038/nature14539",
-          "DOI:10.9999/missing",
+          // Not a DOI or arXiv id, so Zotero's own lookup isn't tried
+          "CorpusId:1",
         ],
         collection: `${ROOT}/Add`,
         attach_pdf: false,
@@ -170,6 +209,89 @@ describe("zotero_add_papers", function () {
     const [a, b] = await Promise.all([add(), add()]);
     assert.equal(a.results[0].itemKey, b.results[0].itemKey);
     assert.equal(a.summary.added + b.summary.added, 1);
+  });
+
+  it("fails only the id S2 can't read, not the whole call", async function () {
+    const calls: string[] = [];
+    const res = await runTool(
+      "zotero_add_papers",
+      {
+        ids: [
+          "URL:https://example.org/some/article",
+          "DOI:10.1038/nature14539",
+          // Unwrapped by the parser, so it never reaches S2 as a URL
+          "URL:https://arxiv.org/abs/1706.03762",
+        ],
+        attach_pdf: false,
+      },
+      calls,
+    );
+    assert.match(
+      res.results[0].error,
+      /not a paper id Semantic Scholar accepts/,
+    );
+    assert.isTrue(res.results[1].existing);
+    assert.isTrue(res.results[2].existing);
+    assert.deepInclude(res.summary, { existing: 2, failed: 1 });
+    assert.lengthOf(calls, 2, "the batch, then once more without the bad id");
+  });
+
+  it("looks a DOI up in Zotero when S2 doesn't have the paper", async function () {
+    const doi = "10.1016/j.tra.2023.103774";
+    const title = `Not on S2 ${Date.now()}`;
+    const asked: unknown[] = [];
+    const args = {
+      // The form an agent sent; S2 would answer 400 to it as a URL
+      ids: [`URL:https://doi.org/${doi}`],
+      collection: `${ROOT}/Add`,
+      attach_pdf: false,
+      tags: ["agent"],
+    };
+    const add = () =>
+      withTranslator(
+        (identifier) => {
+          asked.push(identifier);
+          return title;
+        },
+        () => runTool("zotero_add_papers", args),
+      );
+    const first = await add();
+    const row = first.results[0];
+    assert.isUndefined(row.error);
+    assert.isFalse(row.existing);
+    assert.equal(row.metadataSource, "translator");
+    assert.match(row.note, /Semantic Scholar doesn't have this paper/);
+    assert.equal(row.title, title);
+    assert.deepEqual(asked, [{ DOI: doi }]);
+    const item = Zotero.Items.getByLibraryAndKey(
+      Zotero.Libraries.userLibraryID,
+      row.itemKey,
+    ) as Zotero.Item;
+    try {
+      assert.lengthOf(item.getCollections(), 1);
+      assert.isTrue(item.hasTag("agent"));
+      // Idempotent: the second call finds the item by its DOI
+      const second = await add();
+      assert.isTrue(second.results[0].existing);
+      assert.equal(second.results[0].itemKey, row.itemKey);
+      assert.lengthOf(asked, 1, "no second lookup");
+    } finally {
+      await item.eraseTx();
+    }
+  });
+
+  it("reports an id that neither S2 nor Zotero can resolve", async function () {
+    const res = await withTranslator(
+      () => null,
+      () =>
+        runTool("zotero_add_papers", {
+          ids: ["10.9999/missing", "ARXIV:2399.00001"],
+          attach_pdf: false,
+        }),
+    );
+    assert.match(res.results[0].error, /or by Zotero's DOI lookup/);
+    assert.match(res.results[1].error, /or by Zotero's arXiv lookup/);
+    assert.deepInclude(res.summary, { added: 0, failed: 2 });
   });
 
   it("leaves the rest for another call once its time is used up", async function () {
@@ -370,6 +492,34 @@ describe("zotero_find_in_library", function () {
     )) as any;
     assert.match(res.warning, /No Semantic Scholar API key/);
     assert.isTrue(res.results[0].inLibrary);
+  });
+});
+
+describe("s2_get_papers", function () {
+  it("marks an id S2 can't read and still returns the others", async function () {
+    const res = await runTool("s2_get_papers", {
+      ids: ["URL:https://example.org/x", "DOI:10.1038/nature14539"],
+    });
+    assert.isFalse(res.papers[0].found);
+    assert.match(res.papers[0].error, /not a paper id/);
+    assert.isTrue(res.papers[1].found);
+    assert.isUndefined(res.papers[1].error);
+  });
+
+  it("still fails when S2 rejects ids of a form it knows", async function () {
+    const tool = TOOLS_BY_NAME.get("s2_get_papers")!;
+    const s2 = new S2Client({
+      apiKey: () => "k",
+      limiter: new RateLimiter(0),
+      transport: async () => response(400, { error: "bad request" }),
+    });
+    const err = await tool
+      .handler(
+        prepareArgs(tool.inputSchema, { ids: ["1706.03762"] }),
+        context(s2),
+      )
+      .catch((e) => e);
+    assert.match(err.message, /bad request/);
   });
 });
 

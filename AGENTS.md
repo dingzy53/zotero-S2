@@ -76,6 +76,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - A `Retry-After` longer than the 60 s backoff cap (`MAX_DELAY_MS`) fails the call at once with an `S2Error`, without `pause()`. Honoring it would stall that call, and through the shared limiter every other one, for as long as S2 asks.
 - Every tool call has a deadline (`TOOL_BUDGET_MS` in `runTool.ts`, 50 s, below the ~60 s at which MCP clients give up). It travels in `CallStats.deadline`. `request()` never sleeps or waits on the network past it: it throws an `S2Error` telling the agent to call again. A 429 still calls `pause()` first.
 - Prefer batch endpoints. One `paperBatch` per tool call where possible; `zotero_add_papers` resolves every id in a single request.
+- S2 answers 400 for a whole batch when it can't read one id. `batchLookup()` (`tools.ts`) then retries once with only DOI, arXiv, CorpusId and S2 ids and reports the others per row. A bad id is a row error, never a failed call.
 
 **Tools**
 
@@ -117,6 +118,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - Item metadata from S2 always writes `S2 Paper ID:` and `CorpusID:` lines into Extra, using `mergeExtra`, which never overwrites existing keys. Dedupe depends on these lines.
 - `zotero_enrich_items` defaults to filling **only empty** fields. Writing a field the item type doesn't support is skipped (`isValidField`).
 - A title match from S2 is used only when the normalized titles are equal and the years don't conflict (`isSameWork`). S2 returns its closest title even for a different paper, and a wrong match would leave an `S2 Paper ID:` in Extra that later lookups and dedupe trust.
+- A DOI or arXiv id that S2 doesn't have is still added: `zotero_add_papers` looks for an existing item by that id, then calls `createFromTranslator()`, whatever `metadata_source` says. Such an item has no `S2 Paper ID:` line.
 - Translator imports must use `saveAttachments: false` and run through the 3 s `translatorLimiter` (arXiv's policy). PDFs come only from `pdf.ts`. Once a translator has saved an item, `createFromTranslator()` must return it even if a later step fails; throwing makes `createItem()` fall back to S2 and create a second copy.
 - Tools attach through `attachPDFBy(ctx.deadline, …)`, which reports a download still running at the deadline as `"pending"` and leaves it running. `zotero_add_papers` also stops creating items at the deadline and marks the rest "not processed", so a retry picks them up.
 - `attachPDF()` runs at most one attempt per item at a time and re-checks `hasPDF()` once it holds a download slot. Two ids for one paper (e.g. its DOI and arXiv id) or a repeated item key must not attach two PDFs.

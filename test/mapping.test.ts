@@ -119,6 +119,17 @@ describe("parseIdentifier", function () {
       "https://www.nature.com/articles/x",
       "URL:https://www.nature.com/articles/x",
     ],
+    // S2 answers 400 to a doi.org URL behind `URL:`, so we unwrap it
+    [
+      "URL:https://doi.org/10.1016/j.tra.2023.103774",
+      "DOI:10.1016/j.tra.2023.103774",
+    ],
+    ["url:https://arxiv.org/abs/1706.03762v2", "ARXIV:1706.03762"],
+    ["URL:10.1038/nature14539", "DOI:10.1038/nature14539"],
+    [
+      "URL: https://www.nature.com/articles/x",
+      "URL:https://www.nature.com/articles/x",
+    ],
   ];
   for (const [input, expected] of cases) {
     it(`${input} → ${expected}`, function () {

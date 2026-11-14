@@ -22,6 +22,7 @@ import {
   itemYear,
 } from "../zotero/dedupe";
 import {
+  ParsedId,
   idsFromPaper,
   normalizeTitle,
   parseIdentifier,
@@ -30,6 +31,7 @@ import {
   MetadataSource,
   addTagsAndNote,
   applyMapped,
+  createFromTranslator,
   createItem,
 } from "../zotero/importer";
 import {
@@ -181,6 +183,44 @@ async function lookupItems(
     }
   }
   return papers;
+}
+
+const NOT_AN_S2_ID =
+  "not a paper id Semantic Scholar accepts; use a DOI, arXiv id, CorpusId or S2 paperId";
+
+/**
+ * One `paperBatch` for all ids. S2 answers 400 for the whole batch when it
+ * can't read one of them, so on a 400 the batch is retried once with only the
+ * id forms S2 always parses, and the others come back in `rejected`. One bad
+ * id must not fail the other 24.
+ */
+async function batchLookup(
+  ctx: ToolContext,
+  parsed: ParsedId[],
+  fields?: string,
+): Promise<{ papers: Array<S2Paper | null>; rejected: Set<number> }> {
+  const query = (indexes: number[]) =>
+    ctx.s2.paperBatch(
+      ctx.stats,
+      indexes.map((i) => parsed[i].s2Query),
+      fields,
+    );
+  const all = parsed.map((_, i) => i);
+  try {
+    return { papers: await query(all), rejected: new Set() };
+  } catch (e) {
+    if (!(e instanceof S2Error) || e.status !== 400) throw e;
+    const safe = all.filter((i) => {
+      const p = parsed[i];
+      return !!(p.doi || p.arxiv || p.s2Id || p.corpusId);
+    });
+    // Nothing to set aside: the 400 is about something else
+    if (safe.length === all.length) throw e;
+    const found = safe.length ? await query(safe) : [];
+    const papers: Array<S2Paper | null> = parsed.map(() => null);
+    safe.forEach((i, j) => (papers[i] = found[j]));
+    return { papers, rejected: new Set(all.filter((i) => !safe.includes(i))) };
+  }
 }
 
 function isSameWork(item: Zotero.Item, paper: S2Paper): boolean {
@@ -357,12 +397,9 @@ export const TOOLS: ToolDef[] = [
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
     async handler(args, ctx) {
-      const queries = (args.ids as string[]).map(
-        (id) => parseIdentifier(id).s2Query,
-      );
-      const papers = await ctx.s2.paperBatch(
-        ctx.stats,
-        queries,
+      const { papers, rejected } = await batchLookup(
+        ctx,
+        (args.ids as string[]).map(parseIdentifier),
         args.fields || FULL_FIELDS,
       );
       return {
@@ -370,6 +407,7 @@ export const TOOLS: ToolDef[] = [
           id,
           found: !!papers[i],
           paper: args.fields ? papers[i] : compactPaper(papers[i]),
+          ...(rejected.has(i) && { error: NOT_AN_S2_ID }),
         })),
       };
     },
@@ -724,7 +762,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "zotero_add_papers",
     title: "Add papers to Zotero",
-    description: `Add up to ${MAX_ADD} papers (any id form) to Zotero, optionally into a collection (created if missing), and attach PDFs (S2 open-access → arXiv → Zotero resolvers). Papers already in the library are reused and just added to the collection. For longer lists, call repeatedly in chunks of ${MAX_ADD}.`,
+    description: `Add up to ${MAX_ADD} papers (any id form) to Zotero, optionally into a collection (created if missing), and attach PDFs (S2 open-access → arXiv → Zotero resolvers). Papers already in the library are reused and just added to the collection. A DOI or arXiv id that Semantic Scholar doesn't have is looked up by Zotero itself (Crossref, arXiv). Each id gets its own result row, so one bad id doesn't fail the others. For longer lists, call repeatedly in chunks of ${MAX_ADD}.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -764,10 +802,7 @@ export const TOOLS: ToolDef[] = [
       const lib = resolveLibraryID(args.library_id, true);
       const ids = args.ids as string[];
       const parsed = ids.map(parseIdentifier);
-      const papers = await ctx.s2.paperBatch(
-        ctx.stats,
-        parsed.map((p) => p.s2Query),
-      );
+      const { papers, rejected } = await batchLookup(ctx, parsed);
       const target = args.collection
         ? await resolveCollection(lib, args.collection, args.create_collection)
         : null;
@@ -780,17 +815,27 @@ export const TOOLS: ToolDef[] = [
         existing?: boolean;
         metadataSource?: MetadataSource;
         pdf?: PdfStatus;
+        note?: string;
         error?: string;
       };
       const rows: Row[] = [];
-      const work: Array<{ row: Row; item: Zotero.Item; paper: S2Paper }> = [];
+      const work: Array<{
+        row: Row;
+        item: Zotero.Item;
+        paper: S2Paper | null;
+      }> = [];
 
       for (let i = 0; i < ids.length; i++) {
         const paper = papers[i];
         const row: Row = { id: ids[i] };
         rows.push(row);
-        if (!paper) {
-          row.error = "not found on Semantic Scholar";
+        // Zotero's own lookup can still resolve a DOI or arXiv id S2 lacks
+        const { doi, arxiv } = parsed[i];
+        const byId = !paper && (doi || arxiv) ? { doi, arxiv } : null;
+        if (!paper && !byId) {
+          row.error = rejected.has(i)
+            ? NOT_AN_S2_ID
+            : "not found on Semantic Scholar";
           continue;
         }
         // Translator lookups take ~3 s each; answer before the client gives up
@@ -801,7 +846,10 @@ export const TOOLS: ToolDef[] = [
         try {
           // A parallel call must not create the same item between our check and create
           const item = await libraryWrites.run(async () => {
-            const found = await findExisting(lib, idsFromPaper(paper));
+            const found = await findExisting(
+              lib,
+              paper ? idsFromPaper(paper) : byId!,
+            );
             let item: Zotero.Item;
             if (found) {
               item = found;
@@ -810,6 +858,26 @@ export const TOOLS: ToolDef[] = [
                 item.addToCollection(collectionID);
                 await item.saveTx();
               }
+            } else if (!paper) {
+              const created = await createFromTranslator(
+                lib,
+                byId!,
+                collectionID,
+              ).catch((e) => {
+                throw new ToolError(
+                  `not found on Semantic Scholar, and Zotero's ${doi ? "DOI" : "arXiv"} lookup failed: ${errorMessage(e)}`,
+                );
+              });
+              if (!created) {
+                throw new ToolError(
+                  `not found on Semantic Scholar or by Zotero's ${doi ? "DOI" : "arXiv"} lookup`,
+                );
+              }
+              item = created;
+              row.existing = false;
+              row.metadataSource = "translator";
+              row.note =
+                "Semantic Scholar doesn't have this paper; the metadata comes from Zotero's own lookup.";
             } else {
               const created = await createItem(
                 lib,
