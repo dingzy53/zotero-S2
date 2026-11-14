@@ -36,7 +36,7 @@ import {
   MAX_PDF_BYTES,
   PdfStatus,
   PdfTarget,
-  attachPDF,
+  attachPDFBy,
   importPDFFile,
   importPDFFromURL,
   writeTempPDF,
@@ -48,7 +48,10 @@ import { JSONSchema } from "./schema";
 
 export interface ToolContext {
   s2: S2Client;
+  /** Also carries the deadline into `S2Client.request()`. */
   stats: CallStats;
+  /** Epoch ms by which the call should answer (`TOOL_BUDGET_MS` in runTool). */
+  deadline: number;
 }
 
 export interface ToolDef {
@@ -215,6 +218,19 @@ async function pdfTarget(
 
 const PDF_HINT =
   "No open copy was found for some items. If you can get the PDF, use zotero_add_pdf_from_url (URL or landing page) or zotero_add_pdf_file (local path or base64).";
+const PENDING_HINT =
+  'Some PDFs are still downloading in Zotero (pdf: "pending"). Call zotero_attach_pdf again with the pending item keys to see the result; nothing is downloaded twice.';
+const OUT_OF_TIME =
+  "not processed: this call ran out of time. Call again with the remaining ids";
+
+/** Advice for the PDF statuses in a result, if any is needed. */
+function pdfHint(rows: Array<{ pdf?: PdfStatus }>): { hint?: string } {
+  const hints = [
+    rows.some((r) => r.pdf === "not_found") && PDF_HINT,
+    rows.some((r) => r.pdf === "pending") && PENDING_HINT,
+  ].filter(Boolean);
+  return hints.length ? { hint: hints.join(" ") } : {};
+}
 
 export const TOOLS: ToolDef[] = [
   {
@@ -777,6 +793,11 @@ export const TOOLS: ToolDef[] = [
           row.error = "not found on Semantic Scholar";
           continue;
         }
+        // Translator lookups take ~3 s each; answer before the client gives up
+        if (Date.now() >= ctx.deadline) {
+          row.error = OUT_OF_TIME;
+          continue;
+        }
         try {
           // A parallel call must not create the same item between our check and create
           const item = await libraryWrites.run(async () => {
@@ -814,7 +835,7 @@ export const TOOLS: ToolDef[] = [
       if (args.attach_pdf) {
         await Promise.all(
           work.map(async ({ row, item, paper }) => {
-            row.pdf = await attachPDF(item, paper);
+            row.pdf = await attachPDFBy(ctx.deadline, item, paper);
           }),
         );
       }
@@ -831,16 +852,17 @@ export const TOOLS: ToolDef[] = [
           existing: rows.filter((r) => r.existing === true).length,
           failed: rows.filter((r) => r.error).length,
           pdfAttached: rows.filter((r) => r.pdf === "attached").length,
+          pdfPending: rows.filter((r) => r.pdf === "pending").length,
         },
         results: rows,
-        ...(rows.some((r) => r.pdf === "not_found") && { hint: PDF_HINT }),
+        ...pdfHint(rows),
       };
     },
   },
   {
     name: "zotero_attach_pdf",
     title: "Find and attach PDFs",
-    description: `Find and attach a PDF for up to ${MAX_ADD} existing Zotero items that lack one.`,
+    description: `Find and attach a PDF for up to ${MAX_ADD} existing Zotero items that lack one. A download that outlasts the call is reported as "pending" and keeps running; call again with those keys to see how it ended.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -872,13 +894,10 @@ export const TOOLS: ToolDef[] = [
       const results = await Promise.all(
         items.map(async (item, i) => ({
           itemKey: item.key,
-          pdf: await attachPDF(item, papers[i]),
+          pdf: await attachPDFBy(ctx.deadline, item, papers[i]),
         })),
       );
-      return {
-        results,
-        ...(results.some((r) => r.pdf === "not_found") && { hint: PDF_HINT }),
-      };
+      return { results, ...pdfHint(results) };
     },
   },
   {

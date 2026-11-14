@@ -44,12 +44,17 @@ export interface S2SnippetMatch {
   paper?: { corpusId?: string; title?: string; authors?: string[] };
 }
 
-/** Per-tool-call counters, surfaced in the activity log. */
+/**
+ * Per-tool-call state: counters surfaced in the activity log, and the time
+ * (epoch ms) by which the call must answer. Every S2 wrapper already takes
+ * this, so the deadline reaches `S2Client.request()` without a second argument.
+ */
 export interface CallStats {
   s2Calls: number;
   retries: number;
+  deadline?: number;
 }
 
-export function newStats(): CallStats {
-  return { s2Calls: 0, retries: 0 };
+export function newStats(deadline?: number): CallStats {
+  return { s2Calls: 0, retries: 0, deadline };
 }

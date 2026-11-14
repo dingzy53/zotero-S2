@@ -37,7 +37,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 | `src/mcp/server.ts`                                              | Dual-era MCP JSON-RPC dispatcher. Pure and unit-tested.                                                                                                                         |
 | `src/mcp/tools.ts`                                               | **All tools**: name, description, JSON Schema, annotations, handler.                                                                                                            |
 | `src/mcp/schema.ts`                                              | Argument validation. Drops empty strings, rejects unknown args, fills defaults, enforces min/max/maxItems.                                                                      |
-| `src/mcp/runTool.ts`                                             | The only way tools run. Validates args, collects stats, writes the activity log, and never throws.                                                                              |
+| `src/mcp/runTool.ts`                                             | The only way tools run. Validates args, sets the deadline, collects stats, writes the activity log, and never throws.                                                           |
 | `src/s2/client.ts`                                               | S2 HTTP client: rate limiter, retries/backoff, endpoint wrappers.                                                                                                               |
 | `src/s2/rateLimiter.ts`                                          | `RateLimiter` (start-spacing FIFO) and `Semaphore` (PDF downloads, library writes). A freed `Semaphore` slot passes straight to the next waiter, so a newcomer can't slip in.   |
 | `src/s2/fields.ts`                                               | Default `fields` strings and `compactPaper()`, the agent-facing paper shape.                                                                                                    |
@@ -72,6 +72,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - `Zotero.HTTP.request` is called with `successCodes: false` and `errorDelayMax: 0`. Zotero's own retry loop would otherwise retry 429/5xx outside our rate limit.
 - Retry on 429, 500, 502, 503, 504, status 0 and thrown errors. Other 4xx responses fail immediately.
 - A `Retry-After` longer than the 60 s backoff cap (`MAX_DELAY_MS`) fails the call at once with an `S2Error`, without `pause()`. Honoring it would stall that call, and through the shared limiter every other one, for as long as S2 asks.
+- Every tool call has a deadline (`TOOL_BUDGET_MS` in `runTool.ts`, 50 s, below the ~60 s at which MCP clients give up). It travels in `CallStats.deadline`. `request()` never sleeps or waits on the network past it: it throws an `S2Error` telling the agent to call again. A 429 still calls `pause()` first.
 - Prefer batch endpoints. One `paperBatch` per tool call where possible; `zotero_add_papers` resolves every id in a single request.
 
 **Tools**
@@ -108,6 +109,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - `zotero_enrich_items` defaults to filling **only empty** fields. Writing a field the item type doesn't support is skipped (`isValidField`).
 - A title match from S2 is used only when the normalized titles are equal and the years don't conflict (`isSameWork`). S2 returns its closest title even for a different paper, and a wrong match would leave an `S2 Paper ID:` in Extra that later lookups and dedupe trust.
 - Translator imports must use `saveAttachments: false` and run through the 3 s `translatorLimiter` (arXiv's policy). PDFs come only from `pdf.ts`. Once a translator has saved an item, `createFromTranslator()` must return it even if a later step fails; throwing makes `createItem()` fall back to S2 and create a second copy.
+- Tools attach through `attachPDFBy(ctx.deadline, …)`, which reports a download still running at the deadline as `"pending"` and leaves it running. `zotero_add_papers` also stops creating items at the deadline and marks the rest "not processed", so a retry picks them up.
 - `attachPDF()` runs at most one attempt per item at a time and re-checks `hasPDF()` once it holds a download slot. Two ids for one paper (e.g. its DOI and arXiv id) or a repeated item key must not attach two PDFs.
 - Agent-supplied PDFs (`zotero_add_pdf_file`, and URL downloads saved standalone) go through `importPDFFile()`:
   - every file passes `checkPDFFile()`: absolute path, a regular file, `.pdf`, not empty, at most `MAX_PDF_BYTES` (50 MB, also the base64 cap), and a `%PDF-` header. `importFromFile` doesn't sniff content itself;

@@ -11,7 +11,7 @@ import { describeCollection } from "./collections";
 import { describeItem, hasPDF, itemArxiv } from "./dedupe";
 
 export type PdfStatus =
-  "attached" | "already" | "not_found" | `failed: ${string}`;
+  "attached" | "already" | "not_found" | "pending" | `failed: ${string}`;
 
 /** PDF hosts aren't S2, so they skip the S2 limiter but stay polite. */
 const downloads = new Semaphore(2);
@@ -35,6 +35,27 @@ export function attachPDF(
   );
   inFlight.set(item.id, attempt);
   return attempt;
+}
+
+/**
+ * `attachPDF()`, but answers `"pending"` at `deadline` (epoch ms). The
+ * download carries on in the background; a later call for the same item joins
+ * it through `inFlight`, or finds the PDF, so nothing is downloaded twice.
+ */
+export function attachPDFBy(
+  deadline: number,
+  item: Zotero.Item,
+  paper?: S2Paper | null,
+): Promise<PdfStatus> {
+  const attempt = attachPDF(item, paper);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<PdfStatus>((resolve) => {
+    timer = setTimeout(
+      () => resolve("pending"),
+      Math.max(0, deadline - Date.now()),
+    );
+  });
+  return Promise.race([attempt, timeout]).finally(() => clearTimeout(timer));
 }
 
 async function attachOnce(

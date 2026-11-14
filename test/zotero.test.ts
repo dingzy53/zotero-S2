@@ -1,5 +1,5 @@
 import { assert } from "chai";
-import { TOOLS_BY_NAME } from "../src/mcp/tools";
+import { TOOLS_BY_NAME, ToolContext } from "../src/mcp/tools";
 import { ToolError } from "../src/mcp/errors";
 import { prepareArgs } from "../src/mcp/schema";
 import { S2Client } from "../src/s2/client";
@@ -15,17 +15,24 @@ import { fixtureClient, response } from "./helpers";
 
 const ROOT = `S2 Test ${Date.now()}`;
 
+/** A tool context like runTool's, with `ms` left before the deadline. */
+function context(s2: S2Client, ms = 50_000): ToolContext {
+  const deadline = Date.now() + ms;
+  return { s2, stats: newStats(deadline), deadline };
+}
+
 async function runTool(
   name: string,
   args: Record<string, unknown>,
   calls: string[] = [],
+  budgetMs?: number,
 ) {
   const tool = TOOLS_BY_NAME.get(name)!;
   const s2 = fixtureClient(undefined, calls);
-  return (await tool.handler(prepareArgs(tool.inputSchema, args), {
-    s2,
-    stats: newStats(),
-  })) as any;
+  return (await tool.handler(
+    prepareArgs(tool.inputSchema, args),
+    context(s2, budgetMs),
+  )) as any;
 }
 
 describe("collections", function () {
@@ -158,11 +165,29 @@ describe("zotero_add_papers", function () {
           ids: ["ARXIV:2401.99999"],
           attach_pdf: false,
         }),
-        { s2: fixtureClient([paper]), stats: newStats() },
+        context(fixtureClient([paper])),
       ) as Promise<any>;
     const [a, b] = await Promise.all([add(), add()]);
     assert.equal(a.results[0].itemKey, b.results[0].itemKey);
     assert.equal(a.summary.added + b.summary.added, 1);
+  });
+
+  it("leaves the rest for another call once its time is used up", async function () {
+    const tool = TOOLS_BY_NAME.get("zotero_add_papers")!;
+    // The S2 lookup answers, then the deadline passes before the library work
+    const res = (await tool.handler(
+      prepareArgs(tool.inputSchema, {
+        ids: ["DOI:10.1038/nature14539", "ARXIV:1706.03762"],
+      }),
+      { s2: fixtureClient(), stats: newStats(), deadline: Date.now() - 1 },
+    )) as any;
+    // Both are already in the library; neither is touched after the deadline
+    assert.deepEqual(
+      res.results.map((r: any) => r.itemKey),
+      [undefined, undefined],
+    );
+    for (const row of res.results) assert.match(row.error, /ran out of time/);
+    assert.equal(res.summary.failed, 2);
   });
 
   it("rejects more than 25 ids", async function () {
@@ -250,6 +275,40 @@ describe("zotero_attach_pdf", function () {
     }
   });
 
+  it("reports a slow download as pending and doesn't start it twice", async function () {
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", "PDF pending test");
+    await item.saveTx();
+    const api = Zotero.Attachments as any;
+    const original = {
+      add: api.addFileFromURLs,
+      resolvers: api.getFileResolvers,
+    };
+    let downloads = 0;
+    api.getFileResolvers = () => [];
+    api.addFileFromURLs = async () => {
+      downloads++;
+      await Zotero.Promise.delay(400);
+      return {};
+    };
+    try {
+      const args = { item_keys: [item.key] };
+      // The call's time runs out while the download is still going
+      const first = await runTool("zotero_attach_pdf", args, [], 50);
+      assert.equal(first.results[0].pdf, "pending");
+      assert.match(first.hint, /zotero_attach_pdf again/);
+      // Asking again joins the same download
+      const second = await runTool("zotero_attach_pdf", args);
+      assert.equal(second.results[0].pdf, "attached");
+      assert.equal(downloads, 1);
+      assert.isUndefined(second.hint);
+    } finally {
+      api.addFileFromURLs = original.add;
+      api.getFileResolvers = original.resolvers;
+      await item.eraseTx();
+    }
+  });
+
   it("points to the PDF tools when nothing is found", async function () {
     const item = new Zotero.Item("journalArticle");
     item.setField("title", "PDF hint test");
@@ -307,7 +366,7 @@ describe("zotero_find_in_library", function () {
     const s2 = new S2Client({ apiKey: () => "" });
     const res = (await tool.handler(
       prepareArgs(tool.inputSchema, { ids: ["DOI:10.1038/nature14539"] }),
-      { s2, stats: newStats() },
+      context(s2),
     )) as any;
     assert.match(res.warning, /No Semantic Scholar API key/);
     assert.isTrue(res.results[0].inLibrary);
@@ -375,7 +434,7 @@ describe("zotero_enrich_items", function () {
     const tool = TOOLS_BY_NAME.get("zotero_enrich_items")!;
     const res = (await tool.handler(
       prepareArgs(tool.inputSchema, { item_keys: [item.key] }),
-      { s2, stats: newStats() },
+      context(s2),
     )) as any;
     assert.isFalse(res.results[0].matched);
     assert.equal(item.getField("extra"), "", "no S2 id recorded");

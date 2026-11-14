@@ -17,6 +17,9 @@ const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 60_000;
 const JITTER_MS = 500;
 const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+const TRANSPORT_TIMEOUT_MS = 30_000;
+/** A request needs some time to be worth starting. */
+const MIN_TIMEOUT_MS = 1000;
 
 export interface TransportResponse {
   status: number;
@@ -29,6 +32,7 @@ export type Transport = (
   url: string,
   headers: Record<string, string>,
   body?: string,
+  timeoutMs?: number,
 ) => Promise<TransportResponse>;
 
 export class S2Error extends Error {
@@ -42,7 +46,13 @@ export class S2Error extends Error {
   }
 }
 
-const zoteroTransport: Transport = async (method, url, headers, body) => {
+const zoteroTransport: Transport = async (
+  method,
+  url,
+  headers,
+  body,
+  timeoutMs = TRANSPORT_TIMEOUT_MS,
+) => {
   const xhr = await Zotero.HTTP.request(method, url, {
     headers,
     body,
@@ -50,7 +60,7 @@ const zoteroTransport: Transport = async (method, url, headers, body) => {
     successCodes: false,
     // Retries are ours, so they stay inside the rate limit
     errorDelayMax: 0,
-    timeout: 30_000,
+    timeout: timeoutMs,
   } as any);
   return {
     status: xhr.status,
@@ -96,6 +106,7 @@ export interface S2ClientOptions {
   limiter?: RateLimiter;
   sleep?: Sleep;
   random?: () => number;
+  now?: () => number;
 }
 
 export class S2Client {
@@ -103,14 +114,21 @@ export class S2Client {
   private readonly limiter: RateLimiter;
   private readonly sleep: Sleep;
   private readonly random: () => number;
+  private readonly now: () => number;
 
   constructor(private readonly opts: S2ClientOptions) {
     this.transport = opts.transport ?? zoteroTransport;
     this.limiter = opts.limiter ?? new RateLimiter(S2_INTERVAL_MS);
     this.sleep = opts.sleep ?? defaultSleep;
     this.random = opts.random ?? Math.random;
+    this.now = opts.now ?? (() => Date.now());
   }
 
+  /**
+   * With `stats.deadline` set, the call fails with an `S2Error` instead of
+   * running past it: MCP clients give up after about a minute, and the agent
+   * would then get no answer at all.
+   */
   async request(
     url: string,
     stats: CallStats,
@@ -133,16 +151,47 @@ export class S2Client {
       body = JSON.stringify(options.body);
     }
 
+    const { deadline } = stats;
+    const outOfTime = (status: number | null, attempts: number) => {
+      const why = !attempts
+        ? "requests are queued (1 per second, shared by all calls) and this one's turn came too late"
+        : status === 429
+          ? `is rate-limiting this API key; stopped after ${attempts} attempt(s)`
+          : `${status ? `is failing (status ${status})` : "did not answer"}; stopped after ${attempts} attempt(s)`;
+      return new S2Error(
+        `Semantic Scholar ${why} to stay within this call's time limit. Nothing is wrong with the request: wait a few seconds and call again.`,
+        status,
+        attempts,
+      );
+    };
+
     for (let attempt = 0; ; attempt++) {
       let res: TransportResponse | null = null;
       let networkError: unknown = null;
+      // Decided when our slot comes up: the queue may have used up the budget
+      let skipped = false;
       try {
-        res = await this.limiter.schedule(() =>
-          this.transport(method, fullURL, headers, body),
-        );
+        res = await this.limiter.schedule(async () => {
+          if (deadline === undefined) {
+            return this.transport(method, fullURL, headers, body);
+          }
+          const left = deadline - this.now();
+          if (left < MIN_TIMEOUT_MS) {
+            skipped = true;
+            return null;
+          }
+          return this.transport(
+            method,
+            fullURL,
+            headers,
+            body,
+            Math.min(TRANSPORT_TIMEOUT_MS, left),
+          );
+        });
       } catch (e) {
         networkError = e;
       }
+      if (skipped) throw outOfTime(null, attempt);
       stats.s2Calls++;
 
       if (res && res.status >= 200 && res.status < 300) return res.body;
@@ -169,10 +218,14 @@ export class S2Client {
           attempt + 1,
         );
       }
-      stats.retries++;
       const delay = backoffDelay(attempt, retryAfterHeader, this.random);
       // A 429 is about the key, not this request: hold every caller back
       if (res?.status === 429) this.limiter.pause(delay);
+      // Sleeping past the deadline can't produce an answer the client reads
+      if (deadline !== undefined && this.now() + delay > deadline) {
+        throw outOfTime(status, attempt + 1);
+      }
+      stats.retries++;
       await this.sleep(delay);
     }
   }
