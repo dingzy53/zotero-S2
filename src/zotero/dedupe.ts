@@ -131,7 +131,31 @@ export function hasPDF(item: Zotero.Item): boolean {
     .some((id) => (Zotero.Items.get(id) as Zotero.Item).isPDFAttachment());
 }
 
-export function describeItem(item: Zotero.Item) {
+/** A child attachment, with where its file is on this computer. */
+export function describeAttachment(att: Zotero.Item) {
+  // false for a web link, or a file that isn't on disk
+  const path = att.isFileAttachment() ? att.getFilePath() : false;
+  return {
+    key: att.key,
+    title: att.getField("title") as string,
+    filename: att.attachmentFilename || null,
+    contentType: att.attachmentContentType || null,
+    path: path || null,
+  };
+}
+
+export function itemAttachments(item: Zotero.Item) {
+  return (Zotero.Items.get(item.getAttachments()) as Zotero.Item[])
+    .filter((att) => !att.deleted)
+    .map(describeAttachment);
+}
+
+/**
+ * `withAttachments` adds the child attachments and their file paths, so an
+ * agent can read a PDF without going around the plugin (Zotero's local API,
+ * or a copy of zotero.sqlite).
+ */
+export function describeItem(item: Zotero.Item, withAttachments = false) {
   const creators = item.getCreators();
   return {
     key: item.key,
@@ -150,5 +174,6 @@ export function describeItem(item: Zotero.Item) {
       const c = Zotero.Collections.get(id) as Zotero.Collection | false;
       return c ? c.key : String(id);
     }),
+    ...(withAttachments && { attachments: itemAttachments(item) }),
   };
 }

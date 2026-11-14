@@ -72,6 +72,8 @@ export interface ToolDef {
 }
 
 export const MAX_ADD = 25;
+/** Collection changes are local and quick, so more items fit in one call. */
+const MAX_MOVE = 100;
 
 // --- shared schema fragments ---
 
@@ -86,6 +88,12 @@ const fieldsOverride: JSONSchema = {
   type: "string",
   description:
     "Optional comma-separated S2 fields. If set, raw S2 JSON is returned instead of the compact form.",
+};
+const includeAttachments: JSONSchema = {
+  type: "boolean",
+  default: false,
+  description:
+    "Also list each item's attachments: key, title, filename, contentType and the file's absolute path on the Zotero computer (null if the file isn't on disk).",
 };
 const collectionRef: JSONSchema = {
   type: "string",
@@ -689,7 +697,7 @@ export const TOOLS: ToolDef[] = [
     name: "zotero_list_collection_items",
     title: "List items in a collection",
     description:
-      "Regular items in a collection: key, title, year, authors, DOI, arXiv, S2 id, hasPDF.",
+      "Regular items in a collection: key, title, year, authors, DOI, arXiv, S2 id, hasPDF. Set include_attachments to get each item's files and their paths.",
     inputSchema: {
       type: "object",
       properties: {
@@ -697,6 +705,7 @@ export const TOOLS: ToolDef[] = [
         include_subcollections: { type: "boolean", default: false },
         limit: { type: "integer", minimum: 1, maximum: 500, default: 50 },
         offset: { type: "integer", minimum: 0, default: 0 },
+        include_attachments: includeAttachments,
         library_id: libraryID,
       },
       required: ["collection"],
@@ -726,7 +735,7 @@ export const TOOLS: ToolDef[] = [
         offset: args.offset,
         items: items
           .slice(args.offset, args.offset + args.limit)
-          .map(describeItem),
+          .map((item) => describeItem(item, args.include_attachments)),
       };
     },
   },
@@ -750,6 +759,7 @@ export const TOOLS: ToolDef[] = [
           default: true,
           description: "Fetch DOI/arXiv/title from S2 to improve matching.",
         },
+        include_attachments: includeAttachments,
         library_id: libraryID,
       },
       required: ["ids"],
@@ -782,7 +792,7 @@ export const TOOLS: ToolDef[] = [
         results.push({
           id: args.ids[i],
           inLibrary: !!item,
-          item: item ? describeItem(item) : null,
+          item: item ? describeItem(item, args.include_attachments) : null,
         });
       }
       return warning ? { warning, results } : { results };
@@ -953,6 +963,106 @@ export const TOOLS: ToolDef[] = [
         },
         results: rows,
         ...pdfHint(rows),
+      };
+    },
+  },
+  {
+    name: "zotero_move_items",
+    title: "Move items between collections",
+    description: `Add up to ${MAX_MOVE} existing items to collections and/or remove them from collections. Give both to move items (e.g. into a subcollection). Items are never deleted: an item removed from its last collection stays in the library, unfiled. Collections themselves are not deleted or renamed; do that in Zotero.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        item_keys: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: MAX_MOVE,
+        },
+        add_to: {
+          type: "array",
+          items: collectionRef,
+          maxItems: 10,
+          description: "Collections to put the items in.",
+        },
+        remove_from: {
+          type: "array",
+          items: collectionRef,
+          maxItems: 10,
+          description:
+            "Collections to take the items out of. They must exist. Subcollections are not affected.",
+        },
+        create_collections: {
+          type: "boolean",
+          default: true,
+          description: "Create add_to collections that don't exist yet.",
+        },
+        library_id: libraryID,
+      },
+      required: ["item_keys"],
+    },
+    annotations: {
+      readOnlyHint: false,
+      // Changes collection membership only; items and collections stay
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async handler(args) {
+      const lib = resolveLibraryID(args.library_id, true);
+      const addRefs = (args.add_to as string[] | undefined) ?? [];
+      const removeRefs = (args.remove_from as string[] | undefined) ?? [];
+      if (!addRefs.length && !removeRefs.length) {
+        throw new ToolError("Give add_to, remove_from, or both");
+      }
+      // Check everything before the first write, so a typo changes nothing
+      const items = (args.item_keys as string[]).map((k) => getItem(lib, k));
+      const removeFrom = removeRefs.map((ref) => {
+        const collection = findCollection(lib, ref);
+        if (!collection) {
+          throw new ToolError(`Collection "${ref}" (remove_from) not found`);
+        }
+        return collection;
+      });
+      const addTo: Zotero.Collection[] = [];
+      for (const ref of addRefs) {
+        const existing = findCollection(lib, ref);
+        if (existing && removeFrom.some((c) => c.id === existing.id)) {
+          throw new ToolError(
+            `Collection "${ref}" is in both add_to and remove_from`,
+          );
+        }
+        if (!existing && !args.create_collections) {
+          throw new ToolError(`Collection "${ref}" (add_to) not found`);
+        }
+      }
+      for (const ref of addRefs) {
+        addTo.push((await resolveCollection(lib, ref, true)).collection);
+      }
+
+      const results = [];
+      for (const item of items) {
+        // Membership is read and written under the lock other writers use
+        results.push(
+          await libraryWrites.run(async () => {
+            const added = addTo.filter((c) => !item.inCollection(c.id));
+            const removed = removeFrom.filter((c) => item.inCollection(c.id));
+            for (const c of added) item.addToCollection(c.id);
+            for (const c of removed) item.removeFromCollection(c.id);
+            if (added.length || removed.length) await item.saveTx();
+            return {
+              itemKey: item.key,
+              added: added.map((c) => c.key),
+              removed: removed.map((c) => c.key),
+              collections: describeItem(item).collections,
+            };
+          }),
+        );
+      }
+      return {
+        addTo: addTo.map(describeCollection),
+        removeFrom: removeFrom.map(describeCollection),
+        results,
       };
     },
   },

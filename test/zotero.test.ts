@@ -114,6 +114,104 @@ describe("collections", function () {
   });
 });
 
+describe("zotero_move_items", function () {
+  const lib = () => Zotero.Libraries.userLibraryID;
+  const keysOf = (item: Zotero.Item) =>
+    item
+      .getCollections()
+      .map((id) => (Zotero.Collections.get(id) as Zotero.Collection).key);
+
+  it("moves items into a subcollection without deleting anything", async function () {
+    const from = (await resolveCollection(lib(), `${ROOT}/Move`, true))
+      .collection;
+    const items: Zotero.Item[] = [];
+    for (const title of ["Move test A", "Move test B"]) {
+      const item = new Zotero.Item("journalArticle");
+      item.setField("title", title);
+      item.setCollections([from.id]);
+      await item.saveTx();
+      items.push(item);
+    }
+    const args = {
+      item_keys: items.map((i) => i.key),
+      add_to: [`${ROOT}/Move/Sub`],
+      remove_from: [`${ROOT}/Move`],
+    };
+    try {
+      const res = await runTool("zotero_move_items", args);
+      const sub = res.addTo[0];
+      assert.equal(sub.path, `${ROOT}/Move/Sub`);
+      assert.equal(sub.itemCount, 2);
+      assert.equal(res.removeFrom[0].itemCount, 0);
+      for (const [i, row] of res.results.entries()) {
+        assert.deepEqual(row.added, [sub.key]);
+        assert.deepEqual(row.removed, [from.key]);
+        assert.deepEqual(row.collections, [sub.key]);
+        assert.deepEqual(keysOf(items[i]), [sub.key]);
+        assert.isFalse(items[i].deleted);
+      }
+      // Idempotent: nothing left to do
+      const again = await runTool("zotero_move_items", args);
+      for (const row of again.results) {
+        assert.deepEqual(row.added, []);
+        assert.deepEqual(row.removed, []);
+      }
+      // Out of its last collection, an item stays in the library
+      await runTool("zotero_move_items", {
+        item_keys: [items[0].key],
+        remove_from: [sub.key],
+      });
+      assert.deepEqual(keysOf(items[0]), []);
+      assert.isFalse(items[0].deleted);
+      assert.ok(Zotero.Items.getByLibraryAndKey(lib(), items[0].key));
+    } finally {
+      await Zotero.Items.erase(items.map((i) => i.id));
+    }
+  });
+
+  it("changes nothing when an argument is wrong", async function () {
+    const home = (await resolveCollection(lib(), `${ROOT}/Move`, true))
+      .collection;
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", "Move test C");
+    item.setCollections([home.id]);
+    await item.saveTx();
+    const fails = async (args: Record<string, unknown>, message: RegExp) => {
+      const err = await runTool("zotero_move_items", {
+        item_keys: [item.key],
+        ...args,
+      }).catch((e) => e);
+      assert.instanceOf(err, ToolError);
+      assert.match(err.message, message);
+    };
+    try {
+      await fails({}, /add_to, remove_from, or both/);
+      await fails(
+        { add_to: [`${ROOT}/Move/New`], remove_from: [`${ROOT}/No such`] },
+        /remove_from\) not found/,
+      );
+      await fails(
+        { add_to: [`${ROOT}/Move`], remove_from: [home.key] },
+        /both add_to and remove_from/,
+      );
+      await fails(
+        { add_to: [`${ROOT}/Move/New`], create_collections: false },
+        /add_to\) not found/,
+      );
+      await fails({ item_keys: ["NOSUCH22"], add_to: [home.key] }, /not found/);
+      assert.deepEqual(keysOf(item), [home.key]);
+      assert.isNull(
+        (await runTool("zotero_list_collections", {})).collections.find(
+          (c: any) => c.path === `${ROOT}/Move/New`,
+        ) ?? null,
+        "no collection was created by a failed call",
+      );
+    } finally {
+      await item.eraseTx();
+    }
+  });
+});
+
 describe("zotero_add_papers", function () {
   this.timeout(30_000);
 
@@ -778,6 +876,49 @@ describe("adding PDF files", function () {
     await IOUtils.remove(dir, { recursive: true, ignoreAbsent: true });
   });
 
+  it("lists an item's attachments with their paths on request", async function () {
+    const parent = await parentItem("Attachment listing test");
+    parent.setField("DOI", "10.5555/attachment.listing");
+    await parent.saveTx();
+    const added = await runTool("zotero_add_pdf_file", {
+      path: await file("listed.pdf", pdfBytes()),
+      parent_item_key: parent.key,
+    });
+    track(added);
+    const find = (include: boolean) =>
+      runTool("zotero_find_in_library", {
+        ids: ["DOI:10.5555/attachment.listing"],
+        resolve_via_s2: false,
+        include_attachments: include,
+      });
+    assert.notProperty((await find(false)).results[0].item, "attachments");
+    const [att] = (await find(true)).results[0].item.attachments;
+    assert.equal(att.key, added.attachmentKey);
+    assert.equal(att.contentType, "application/pdf");
+    assert.match(att.filename, /\.pdf$/);
+    // A real file an agent can open
+    assert.isTrue(PathUtils.isAbsolute(att.path));
+    assert.deepEqual(
+      Array.from(await IOUtils.read(att.path, { maxBytes: 5 })),
+      Array.from(new TextEncoder().encode("%PDF-")),
+    );
+
+    const collection = (
+      await resolveCollection(parent.libraryID, `${ROOT}/Listed`, true)
+    ).collection;
+    parent.addToCollection(collection.id);
+    await parent.saveTx();
+    const listed = await runTool("zotero_list_collection_items", {
+      collection: collection.key,
+      include_attachments: true,
+    });
+    assert.equal(listed.items[0].attachments[0].path, att.path);
+    const plain = await runTool("zotero_list_collection_items", {
+      collection: collection.key,
+    });
+    assert.notProperty(plain.items[0], "attachments");
+  });
+
   it("attaches a local file to a parent, once per distinct file", async function () {
     const parent = await parentItem("PDF file test");
     const path = await file("paper.pdf", pdfBytes());
@@ -1094,6 +1235,7 @@ describe("tool annotations", function () {
     for (const name of [
       "zotero_create_collection",
       "zotero_add_papers",
+      "zotero_move_items",
       "zotero_attach_pdf",
       "zotero_add_pdf_from_url",
       "zotero_add_pdf_file",

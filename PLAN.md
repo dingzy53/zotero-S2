@@ -1,6 +1,14 @@
 # PLAN: fix what agents ran into when using the MCP
 
-> Branch `fix/agent-usage-findings`. Written 2026-11-14. Nothing here is implemented yet.
+> Branch `fix/agent-usage-findings`. Written 2026-11-14.
+>
+> **Status (2026-11-14):** steps 1 to 8 are implemented on this branch, one commit each, except the release itself (step 1.1). Still to do by the owner: merge, run `npm run release` on `main` and choose `0.2.0`, then the "After Step 1" and "After Step 3" checks under Verification. Differences from the text below:
+>
+> - Step 1.1: `package.json` still says `0.1.0`. `npm run release` does the bump; a hand-edited version would leave it nothing to bump and nothing to tag.
+> - Step 3: the bridge lives in `addon/content/bridge/` so it ships in the XPI; the plugin copies it into the Zotero data directory, which gives the settings pane a real path for its command.
+> - Step 5: the IEEE conference DOI shape also overrules a `JournalArticle` label from S2. The venue-name rule leaves out "proceedings" (PNAS and "Proceedings of the IEEE" are journals).
+> - Step 7.2: only the disclaimer is dropped; `openAccessPdf` stays `{ url, status }` because the search window reads that shape.
+> - Step 8: the owner chose add and remove for `zotero_move_items`, and attachment paths included.
 >
 > This replaces the earlier "let agents add PDF files" plan, which shipped in `da2377e` (see git history for its text).
 
