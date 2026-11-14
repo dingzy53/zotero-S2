@@ -524,14 +524,15 @@ describe("s2_get_papers", function () {
 });
 
 describe("s2_match_title", function () {
-  it("returns the best match, or a ToolError when there is none", async function () {
+  it("returns the best match, or match: null when there is none", async function () {
     const res = await runTool("s2_match_title", { title: DEEP_LEARNING.title });
     assert.equal(res.paper.paperId, DEEP_LEARNING.paperId);
     assert.equal(res.matchScore, 99);
-    const err = await runTool("s2_match_title", {
-      title: "No such paper",
-    }).catch((e) => e);
-    assert.instanceOf(err, ToolError);
+    // A miss is an answer, not an error
+    assert.deepEqual(
+      await runTool("s2_match_title", { title: "No such paper" }),
+      { match: null },
+    );
   });
 });
 
@@ -694,6 +695,34 @@ describe("fields override on recommendations and author papers", function () {
     assert.equal(authorRaw.papers[0].paperId, ATTENTION.paperId);
     assert.property(authorRaw.papers[0], "externalIds");
     assert.match(calls[2], /\/author\/40348417\/papers\?.*fields=title/);
+  });
+
+  it("drops the open-access disclaimer from raw papers", async function () {
+    const disclaimer = "Notice: Paper or abstract available at… ".repeat(8);
+    const paper = {
+      ...DEEP_LEARNING,
+      openAccessPdf: { url: "https://x.org/a.pdf", status: "GOLD", disclaimer },
+    } as S2Paper;
+    const tidy = { url: "https://x.org/a.pdf", status: "GOLD" };
+    const run = (name: string, args: Record<string, unknown>) => {
+      const tool = TOOLS_BY_NAME.get(name)!;
+      return tool.handler(
+        prepareArgs(tool.inputSchema, { ...args, fields: "openAccessPdf" }),
+        context(fixtureClient([paper])),
+      ) as Promise<any>;
+    };
+    const search = await run("s2_search_papers", { query: "x" });
+    assert.deepEqual(search.papers[0].openAccessPdf, tidy);
+    const got = await run("s2_get_papers", { ids: [paper.paperId] });
+    assert.deepEqual(got.papers[0].paper.openAccessPdf, tidy);
+    const match = await run("s2_match_title", { title: paper.title });
+    assert.deepEqual(match.openAccessPdf, tidy);
+    const cites = await run("s2_get_citations", { paper_id: paper.paperId });
+    assert.deepEqual(cites.data[0].citingPaper.openAccessPdf, tidy);
+    // A paper without the field passes through untouched
+    assert.isNull(
+      (await run("s2_get_papers", { ids: ["CorpusId:0"] })).papers[0].paper,
+    );
   });
 });
 

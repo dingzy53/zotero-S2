@@ -84,7 +84,8 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - Use snake_case names prefixed `s2_` or `zotero_`.
 - Give every tool accurate `annotations` (`readOnlyHint` etc.). Every write tool must set `destructiveHint` explicitly: MCP assumes `true` when it's missing. Tools that only add things set `false`; `zotero_enrich_items` sets `true` because `overwrite` replaces values.
 - Throw `ToolError` for mistakes the agent can fix. The message is shown to the agent as `isError: true`. `S2Error` is shown the same way. Any other error is a bug and is also logged with `Zotero.logError`.
-- `S2Client.matchTitle()` returns `null` for S2's "no match" 404 and throws on anything else. Don't swallow S2 errors as "not found".
+- `S2Client.matchTitle()` returns `null` for S2's "no match" 404 and throws on anything else. Don't swallow S2 errors as "not found". `s2_match_title` answers a miss with `{ match: null }`, not an error: agents treat `isError` as a failed call.
+- Raw results (`fields` set) go through `trimRawPaper()`, which drops only the Unpaywall disclaimer. `openAccessPdf` keeps its `{ url, status }` shape because the search window reads it.
 - `zotero_add_papers`, `zotero_attach_pdf` and `zotero_enrich_items` cap input at 25 items (`MAX_ADD`). Long PDF runs or per-item title matches (1/s) inside one JSON response would hit client timeouts.
 - Every input schema gets `additionalProperties: false` automatically, because `prepareArgs()` rejects unknown arguments. Keep the two consistent.
 - Tools marked `idempotentHint` must stay idempotent. Re-running must not duplicate items, collections or notes.

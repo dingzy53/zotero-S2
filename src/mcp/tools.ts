@@ -4,6 +4,7 @@ import {
   SEARCH_FIELDS,
   compactPaper,
   compactSnippet,
+  trimRawPaper,
 } from "../s2/fields";
 import { CallStats, S2Paper } from "../s2/types";
 import {
@@ -130,7 +131,7 @@ function s2FilterQuery(args: Record<string, any>) {
 }
 
 function papersOut(list: Array<S2Paper | null>, raw: boolean) {
-  return raw ? list : list.map(compactPaper);
+  return raw ? list.map(trimRawPaper) : list.map(compactPaper);
 }
 
 function getItem(libraryID: number, key: string): Zotero.Item {
@@ -374,7 +375,7 @@ export const TOOLS: ToolDef[] = [
     name: "s2_match_title",
     title: "Match paper by title",
     description:
-      "Find the single best Semantic Scholar match for a paper title.",
+      "Find the single best Semantic Scholar match for a paper title. Returns { match: null } when no title matches; that is an answer, not an error.",
     inputSchema: {
       type: "object",
       properties: { title: { type: "string" }, fields: fieldsOverride },
@@ -387,9 +388,10 @@ export const TOOLS: ToolDef[] = [
         args.title,
         args.fields || FULL_FIELDS,
       );
-      if (!best) throw new ToolError("No title match");
+      // A miss is a normal answer; an error would read as a failed call
+      if (!best) return { match: null };
       return args.fields
-        ? best
+        ? trimRawPaper(best)
         : { matchScore: best.matchScore, paper: compactPaper(best) };
     },
   },
@@ -423,7 +425,9 @@ export const TOOLS: ToolDef[] = [
         papers: (args.ids as string[]).map((id, i) => ({
           id,
           found: !!papers[i],
-          paper: args.fields ? papers[i] : compactPaper(papers[i]),
+          paper: args.fields
+            ? trimRawPaper(papers[i])
+            : compactPaper(papers[i]),
           ...(rejected.has(i) && { error: NOT_AN_S2_ID }),
         })),
       };
@@ -466,8 +470,16 @@ export const TOOLS: ToolDef[] = [
         parseIdentifier(args.paper_id).s2Query,
         { fields, limit: args.limit, offset: args.offset },
       );
-      if (args.fields) return res;
       const key = kind === "citations" ? "citingPaper" : "citedPaper";
+      if (args.fields) {
+        return {
+          ...res,
+          data: (res.data ?? []).map((row: any) => ({
+            ...row,
+            [key]: trimRawPaper(row[key]),
+          })),
+        };
+      }
       return {
         offset: res.offset,
         next: res.next,
