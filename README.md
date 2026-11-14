@@ -7,7 +7,7 @@
 
 A Zotero 10 plugin that lets AI agents, and you, search [Semantic Scholar](https://www.semanticscholar.org/product/api) and file papers, with PDFs, into your Zotero collections.
 
-The plugin serves an **MCP endpoint from inside Zotero**, on Zotero's own local server, so there is no separate process to run. The same tools are also available as plain REST endpoints for scripts and `curl`.
+The plugin serves an **MCP endpoint from inside Zotero**, on Zotero's own local server, so there is no separate process to run. An optional [stdio bridge](#if-zotero-often-starts-after-your-agent) keeps the tools available when Zotero is started after the agent. The same tools are also available as plain REST endpoints for scripts and `curl`.
 
 <img src="docs/images/hero.png" alt="The Semantic Scholar search window" width="1100">
 
@@ -63,6 +63,22 @@ The server speaks both the stateless MCP 2026-07-28 protocol and the `initialize
 
 Then just ask, for example: _"Find the most-cited papers on retrieval-augmented generation since 2023 and add the top ten to Reading/RAG with PDFs."_
 
+### If Zotero often starts after your agent
+
+An MCP client connects to an HTTP server once, when its session starts. If Zotero isn't open at that moment, the tools are missing for the whole session, even after you open Zotero. In Claude Code you can run `/mcp` and reconnect `zotero-s2`. To avoid the problem altogether, connect through the **stdio bridge** instead. The settings pane has a second ready-made command for it:
+
+```sh
+claude mcp add zotero-s2 -e ZOTERO_S2_TOKEN=<token from settings> \
+  -- node "<Zotero data directory>/zotero-s2/zotero-s2-mcp.mjs"
+```
+
+The bridge is a small script with no dependencies (it needs Node.js 18 or later). The plugin keeps a current copy in your Zotero data directory. The client starts it, and it forwards every request to Zotero:
+
+- While Zotero is closed, the tools are still listed (from the list saved at the last successful call), and a tool call answers "Zotero isn't running; start it and retry".
+- Once Zotero is open, calls work. No reconnect is needed.
+
+It reads the token from `ZOTERO_S2_TOKEN`, and the endpoint from `ZOTERO_S2_URL` if Zotero doesn't use the default port. It only talks to `127.0.0.1`. Use either the HTTP command or the bridge, not both under the same name.
+
 ## Search window
 
 Open **Tools → Search Semantic Scholar…** (or **Open search window** in settings). The window uses your API key and the same request queue as agents. It works even when the agent server is switched off.
@@ -82,24 +98,24 @@ Open **Tools → Search Semantic Scholar…** (or **Open search window** in sett
 
 ## Tools
 
-| Tool                                                                                    | What it does                                                                                                                                                                       |
-| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `s2_search_papers`                                                                      | Relevance search with year/date, field, type, venue, citation and open-access filters                                                                                              |
-| `s2_search_papers_bulk`                                                                 | Boolean bulk search with sort and a continuation token                                                                                                                             |
-| `s2_match_title`                                                                        | Best match for a title                                                                                                                                                             |
-| `s2_get_papers`                                                                         | Details for 1–500 ids in one request: S2 id, `DOI:`, `ARXIV:`, `CorpusId:`, `PMID:`, `PMCID:`, `URL:`, a bare DOI or arXiv id, or a doi.org/arxiv.org URL                          |
-| `s2_get_citations` / `s2_get_references`                                                | The citation graph, optionally with citation contexts and intents                                                                                                                  |
-| `s2_recommend`                                                                          | Recommendations from one paper, or from lists of positive and negative examples                                                                                                    |
-| `s2_search_authors` / `s2_get_author_papers`                                            | Authors and their papers                                                                                                                                                           |
-| `s2_snippet_search`                                                                     | Search text passages inside papers, to find who states a claim or uses a method                                                                                                    |
-| `zotero_list_collections` / `zotero_create_collection` / `zotero_list_collection_items` | Library structure                                                                                                                                                                  |
-| `zotero_find_in_library`                                                                | Which papers are already in Zotero, plus their collections and PDF status. `include_attachments` (also on `zotero_list_collection_items`) lists each item's files with their paths |
-| `zotero_move_items`                                                                     | Add up to 100 items to collections and/or remove them from collections (a move is both). Never deletes items or collections                                                        |
-| `zotero_add_papers`                                                                     | Add up to 25 papers to a collection, with PDFs, tags and a note. Metadata comes from S2 or from Zotero's DOI/arXiv translators                                                     |
-| `zotero_attach_pdf`                                                                     | Find and attach PDFs for up to 25 existing items                                                                                                                                   |
-| `zotero_add_pdf_from_url`                                                               | Download a PDF, from a direct link or an article page, and attach it to an item, or save it standalone and let Zotero recognize its metadata                                       |
-| `zotero_add_pdf_file`                                                                   | Import a PDF the agent already has (an absolute path on this computer, or base64 bytes, up to 50 MB) onto an item or standalone                                                    |
-| `zotero_enrich_items`                                                                   | Fill missing metadata on up to 25 existing items from S2; items without ids need an exact title (and no conflicting year)                                                          |
+| Tool                                                                                    | What it does                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `s2_search_papers`                                                                      | Relevance search with year/date, field, type, venue, citation and open-access filters                                                                                                                                                 |
+| `s2_search_papers_bulk`                                                                 | Boolean bulk search with sort and a continuation token                                                                                                                                                                                |
+| `s2_match_title`                                                                        | Best match for a title, or `{ "match": null }` when nothing matches                                                                                                                                                                   |
+| `s2_get_papers`                                                                         | Details for 1–500 ids in one request: S2 id, `DOI:`, `ARXIV:`, `CorpusId:`, `PMID:`, `PMCID:`, `URL:`, a bare DOI or arXiv id, or a doi.org/arxiv.org URL. An id S2 can't read is marked on its own row                               |
+| `s2_get_citations` / `s2_get_references`                                                | The citation graph, optionally with citation contexts and intents                                                                                                                                                                     |
+| `s2_recommend`                                                                          | Recommendations from one paper, or from lists of positive and negative examples                                                                                                                                                       |
+| `s2_search_authors` / `s2_get_author_papers`                                            | Authors and their papers                                                                                                                                                                                                              |
+| `s2_snippet_search`                                                                     | Search text passages inside papers, to find who states a claim or uses a method                                                                                                                                                       |
+| `zotero_list_collections` / `zotero_create_collection` / `zotero_list_collection_items` | Library structure                                                                                                                                                                                                                     |
+| `zotero_find_in_library`                                                                | Which papers are already in Zotero, plus their collections and PDF status. `include_attachments` (also on `zotero_list_collection_items`) lists each item's files with their paths                                                    |
+| `zotero_move_items`                                                                     | Add up to 100 items to collections and/or remove them from collections (a move is both). Never deletes items or collections                                                                                                           |
+| `zotero_add_papers`                                                                     | Add up to 25 papers to a collection, with PDFs, tags and a note. Metadata comes from S2 or from Zotero's DOI/arXiv translators. A DOI or arXiv id that S2 doesn't have is looked up by Zotero itself. Each id gets its own result row |
+| `zotero_attach_pdf`                                                                     | Find and attach PDFs for up to 25 existing items. A download still running when the call must answer is reported as `"pending"`; call again to see how it ended                                                                       |
+| `zotero_add_pdf_from_url`                                                               | Download a PDF, from a direct link or an article page, and attach it to an item, or save it standalone and let Zotero recognize its metadata. A failure says what the site answered                                                   |
+| `zotero_add_pdf_file`                                                                   | Import a PDF the agent already has (an absolute path on this computer, or base64 bytes, up to 50 MB) onto an item or standalone                                                                                                       |
+| `zotero_enrich_items`                                                                   | Fill missing metadata on up to 25 existing items from S2; items without ids need an exact title (and no conflicting year). `fix_item_type` corrects a wrong item type, such as a conference paper saved as a journal article          |
 
 Every call appears in the **Activity** table in settings, with its duration, number of S2 requests, retries and any error.
 
@@ -122,52 +138,42 @@ Semantic Scholar allows an API key 1 request per second. Every caller shares one
 
 Failed requests (429, 5xx and network errors) are retried up to 6 times with exponential backoff: 1 s, 2 s, 4 s … capped at 60 s, plus up to 500 ms of jitter. If the server sends `Retry-After`, the plugin waits that long instead, up to 60 s; if it asks for longer, the call fails at once with a message saying how long to wait. Retries go back through the same queue. A 429 pauses the whole queue, not just the request that received it.
 
+Every tool call answers within about 50 seconds, because MCP clients stop waiting after a minute. If Semantic Scholar is still rate-limiting by then, the call fails with a message to try again. PDF downloads that are still running are reported as `"pending"` and finish in the background. `zotero_add_papers` marks the ids it didn't reach, and calling it again with them is safe.
+
 ## Privacy and security
 
 - The endpoints answer only on Zotero's local server, which accepts `Host: 127.0.0.1`, `localhost` or `[::1]`.
 - Every request needs the bearer token. You can regenerate it in settings, which disconnects existing clients.
 - Requests that carry an `Origin` header, which is to say requests made from web pages, get `403`. Browser-based MCP clients therefore can't connect directly. MCP Inspector works in proxy mode.
 - Your API key and the token are stored in plain text in Zotero's preferences, inside your Zotero profile.
+- With `include_attachments`, the listing tools return the absolute paths of attachment files, which shows an agent where your Zotero data directory is. `zotero_move_items` changes which collections items are in. No tool deletes an item or a collection.
+- The plugin keeps a copy of the stdio bridge script in `zotero-s2/` inside your Zotero data directory. If you use the bridge, it saves the tool list (no library data, no token) in `~/.cache/zotero-s2/`, and your MCP client's configuration holds the token.
 - When Zotero's debug output is enabled, it logs request headers, including the bearer token. Don't share debug logs without removing it.
 
 What leaves your machine:
 
 - Requests to `api.semanticscholar.org`, with your API key.
 - PDF downloads from the open-access URL that S2 reports and from arXiv. After those, Zotero's own "Find Available PDF" resolvers run, the same ones Zotero uses when you click it: the DOI landing page, the item's URL, and Zotero's open-access lookup service.
-- `zotero_add_pdf_from_url` downloads the URL it's given; for an article page, it follows the page's PDF link. With `recognize` on (the default), Zotero's metadata recognizer sends text from the PDF to Zotero's recognition service, just as **Retrieve Metadata for PDF** does.
+- `zotero_add_pdf_from_url` downloads the URL it's given; for an article page, it follows the page's PDF link. If no PDF comes back, it requests the URL once more to report what the site sent (a bot check, for example). With `recognize` on (the default), Zotero's metadata recognizer sends text from the PDF to Zotero's recognition service, just as **Retrieve Metadata for PDF** does.
 - `zotero_add_pdf_file` reads only the `.pdf` file it's given (it must start with `%PDF-`), and stores a copy in Zotero. The copy syncs like any attachment, and the original file is never moved or deleted. Standalone imports are recognized the same way as above.
-- With `metadata_source: "translator"`, the DOI or arXiv lookups that Zotero's translators perform.
+- With `metadata_source: "translator"`, or for a DOI or arXiv id that Semantic Scholar doesn't have, the DOI or arXiv lookups that Zotero's translators perform.
 
 The plugin itself contacts nothing else, and it collects no telemetry. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
-### If Zotero often starts after your agent
-
-An MCP client connects to an HTTP server once, when its session starts. If Zotero isn't open at that moment, the tools are missing for the whole session, even after you open Zotero. In Claude Code you can run `/mcp` and reconnect `zotero-s2`. To avoid the problem altogether, connect through the **stdio bridge** instead. The settings pane has a second ready-made command for it:
-
-```sh
-claude mcp add zotero-s2 -e ZOTERO_S2_TOKEN=<token from settings> \
-  -- node "<Zotero data directory>/zotero-s2/zotero-s2-mcp.mjs"
-```
-
-The bridge is a small script with no dependencies (it needs Node.js 18 or later). The plugin keeps a current copy in your Zotero data directory. The client starts it, and it forwards every request to Zotero:
-
-- While Zotero is closed, the tools are still listed (from the list saved at the last successful call), and a tool call answers "Zotero isn't running; start it and retry".
-- Once Zotero is open, calls work. No reconnect is needed.
-
-It reads the token from `ZOTERO_S2_TOKEN`, and the endpoint from `ZOTERO_S2_URL` if Zotero doesn't use the default port. It only talks to `127.0.0.1`. Use either the HTTP command or the bridge, not both under the same name.
-
 ## Troubleshooting
 
-| Symptom                                    | Fix                                                                                                                                                                        |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Connection refused                         | Zotero isn't running, or the client uses the wrong port. The settings pane shows the actual endpoint.                                                                      |
-| Tools missing after starting Zotero        | Zotero wasn't running when the agent session started. In Claude Code, run `/mcp` and reconnect, or switch to the [stdio bridge](#if-zotero-often-starts-after-your-agent). |
-| `401`                                      | The token is missing or stale. Copy it again from settings, especially after clicking **Regenerate**.                                                                      |
-| The token ended up in a chat or a repo     | Click **Regenerate** in settings and update your client. The token only works from your own computer, but anything that runs there can use it.                             |
-| `403 Origin not allowed`                   | The client runs in a browser. Use a desktop or CLI client, or a proxy.                                                                                                     |
-| `503`                                      | **Enable the MCP / REST server** is unchecked in settings.                                                                                                                 |
-| "No Semantic Scholar API key set"          | Paste a key in settings and click **Test**. `zotero_find_in_library` still works without a key, matching only on the ids you give it.                                      |
-| Slow calls, or retries in the Activity log | Another program may be using the same API key, or S2 is busy. The plugin backs off on its own. Prefer batch tools, which use one request per call.                         |
+| Symptom                                    | Fix                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Connection refused                         | Zotero isn't running, or the client uses the wrong port. The settings pane shows the actual endpoint.                                                                                                                                                                                      |
+| Tools missing after starting Zotero        | Zotero wasn't running when the agent session started. In Claude Code, run `/mcp` and reconnect, or switch to the [stdio bridge](#if-zotero-often-starts-after-your-agent).                                                                                                                 |
+| `401`                                      | The token is missing or stale. Copy it again from settings, especially after clicking **Regenerate**.                                                                                                                                                                                      |
+| The token ended up in a chat or a repo     | Click **Regenerate** in settings and update your client. The token only works from your own computer, but anything that runs there can use it.                                                                                                                                             |
+| `403 Origin not allowed`                   | The client runs in a browser. Use a desktop or CLI client, or a proxy.                                                                                                                                                                                                                     |
+| `503`                                      | **Enable the MCP / REST server** is unchecked in settings.                                                                                                                                                                                                                                 |
+| "No Semantic Scholar API key set"          | Paste a key in settings and click **Test**. `zotero_find_in_library` still works without a key, matching only on the ids you give it.                                                                                                                                                      |
+| Slow calls, or retries in the Activity log | Another program may be using the same API key, or S2 is busy. The plugin backs off on its own. Prefer batch tools, which use one request per call.                                                                                                                                         |
+| A PDF download fails                       | The error says what the site answered. Many publishers (ACM, Cell, Wiley) refuse automated downloads with `403`, and some repositories (HAL) show a bot check. Try the article's landing page instead of the direct PDF link, or download the file yourself and use `zotero_add_pdf_file`. |
+| A fix is released but the tools look old   | Check which build is running: the settings pane and `GET /s2/tools` show the version and build time. Update under **Tools → Plugins**.                                                                                                                                                     |
 
 ## Development
 

@@ -34,6 +34,7 @@ The tests run inside a real Zotero 10 with a fresh profile and data directory on
 
 - Unit tests stay offline. S2 responses come from `test/fixtures.ts` through `fixtureClient()` in `test/helpers.ts`.
 - `test/http.test.ts` sends real requests through Zotero's server: auth, Origin rejection, MCP in both protocol eras, and the REST mirror.
+- The stdio bridge (`addon/content/bridge/zotero-s2-mcp.mjs`) is tested in plain Node by `bridge/bridge.test.mjs`, against a stub HTTP server.
 - To poke at a running test instance, keep `npm test` open and `curl http://127.0.0.1:23129/s2/...` with `Authorization: Bearer test-token`.
 
 ## Commit messages
@@ -42,7 +43,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:
 
 ## Releasing
 
-1. On an up-to-date `main` with a clean tree, run `npm run release`. It prompts for the new version, then commits `chore(publish): release vX.Y.Z`, tags it and pushes.
+1. On an up-to-date `main` with a clean tree, run `npm run release`. Don't edit `version` in `package.json` yourself, and never reuse a version number: Zotero only installs an update whose version is higher than the installed one. The command prompts for the new version, then commits `chore(publish): release vX.Y.Z`, tags it and pushes.
 2. The tag push runs `.github/workflows/release.yml`. That workflow builds the `.xpi`, creates the GitHub release with generated notes, and updates `update.json` under the `release` tag. Installed copies poll that file for updates.
 
 Versions with a prerelease suffix (`1.2.0-beta.1`) go to `update-beta.json` instead, so only beta testers receive them.
