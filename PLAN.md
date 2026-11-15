@@ -55,3 +55,19 @@ Test in settings: "OK: Semantic Scholar accepted the API key." The search window
 
 8. **"Add 1 paper" for a paper already in the library.** Selecting a result marked "✓ In library" still offers an enabled "Add 1 paper" button (`.screenshots/06-in-library-but-add-button-enabled.jpg`). Adding is deduplicated (the add bar reports "existing"), but the button could say so up front, for example "Add to MIMMC (already in library)" or "Show in Zotero".
 9. **Abstract heading runs into the text.** The details pane shows "Abstract The range anxiety has…" on one line; give "Abstract" its own heading or a line break.
+
+# Findings round 2: GUI and MCP errors (2026-11-15, not fixed)
+
+## MCP errors an agent hits
+
+10. **`s2_recommend` returns `{"papers": []}` with the default pool.** The tool defaults to `pool: "recent"`; Semantic Scholar's `forpaper` endpoint returned `[]` for every paper tried with `from=recent` (including "Attention Is All You Need"), but three results with `from=all-cs`. Non-CS papers (all of MIMMC) get nothing from `all-cs` either. An empty list with no explanation reads as "no related work". Return a note when the result is empty ("no recent recommendations; try pool all-cs, which only covers computer science"), consider `all-cs` as the default, and say in the description that recommendations only cover CS papers.
+11. **Unknown-argument errors do not list the accepted names.** `s2_search_papers {"max_results": 3}` → `Unknown argument "max_results"` (and `{"q": …}`), while `s2_search_papers_bulk` does take `max_results`. Include the valid argument names and the closest match.
+12. **Inconsistent argument naming.** Tools mix camelCase and snake_case: `publicationDateOrYear`, `fieldsOfStudy`, `minCitationCount`, `paperIds` next to `paper_id`, `positive_ids`, `max_results`, `item_keys`; `limit` in one search tool and `max_results` in the other. Pick one style (snake_case, as the zotero_* tools use) and accept the other as an alias.
+13. **`year` must be a string.** `{"year": 2020}` → `year must be string, got integer`. Accept integers (and `[2020, 2024]`).
+14. **`zotero_find_in_library` cannot find by title.** Given a title it reports `inLibrary: false` with a warning that Semantic Scholar rejected it as an id (`400 … No valid paper ids given`). Agents will try titles; either resolve titles through `s2_match_title` or say "ids only; use s2_match_title first" in the error.
+15. **Rate limiting makes some calls slow.** One `s2_search_papers` with a year filter took 20.8 s and one `s2_match_title` 6 s, waiting out `429`s after earlier calls. It works as designed, but the time is invisible to the agent; mention in the result when the call waited for rate limiting.
+
+## GUI
+
+16. **Reopened window restores the query but not the results.** Reopening the search window shows the last query in the box (and the last mode) but an empty results pane saying "Enter a query and press Search." Either restore the results too or start with an empty box, so the window does not look as if the query had no results.
+17. Things that work well and are worth keeping: the rate-limit status line ("Waiting for Semantic Scholar (requests are limited to 1 per second and shared with agents)…"), the Citations view with a breadcrumb and Back, ✓ In library marks, Cards view, the Advanced filters (year, citations, venues, fields) and the Export menu (BibTeX/RIS/CSV).
