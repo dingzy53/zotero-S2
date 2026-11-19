@@ -94,6 +94,15 @@ export function onPrefsLoad(win: Window) {
 
   $("test")?.addEventListener("command", async () => {
     const out = $<HTMLElement>("test-result")!;
+    const key = (
+      $<HTMLInputElement>("apikey")?.value ||
+      getPref("apiKey") ||
+      ""
+    ).trim();
+    if (!key) {
+      out.textContent = getString("test-no-key");
+      return;
+    }
     out.textContent = getString("test-running");
     const stats = newStats();
     const start = Date.now();

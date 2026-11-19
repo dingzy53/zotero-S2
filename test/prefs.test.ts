@@ -87,5 +87,25 @@ describe("settings pane", function () {
       (doc.getElementById(id("view")) as any).value,
       Zotero.Prefs.get(`${prefix}resultsView`, true),
     );
+
+    const help = doc.querySelector('[data-l10n-id="pref-mcp-help"]')!;
+    await doc.l10n?.translateElements([help]);
+    assert.include(help.textContent ?? "", "Bearer");
+    assert.include(help.textContent ?? "", "token");
+
+    const savedKey = Zotero.Prefs.get(`${prefix}apiKey`, true);
+    const keyInput = doc.getElementById(id("apikey")) as HTMLInputElement;
+    Zotero.Prefs.set(`${prefix}apiKey`, "", true);
+    keyInput.value = "";
+    try {
+      (doc.getElementById(id("test")) as any).doCommand();
+      assert.equal(
+        doc.getElementById(id("test-result"))!.textContent,
+        "Enter an API key first.",
+      );
+    } finally {
+      if (savedKey === undefined) Zotero.Prefs.clear(`${prefix}apiKey`, true);
+      else Zotero.Prefs.set(`${prefix}apiKey`, savedKey, true);
+    }
   });
 });

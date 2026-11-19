@@ -28,6 +28,7 @@ export type FluentMessageId =
   | 'gui-crumb-citations'
   | 'gui-crumb-recommendations'
   | 'gui-crumb-references'
+  | 'gui-detail-abstract'
   | 'gui-detail-authors'
   | 'gui-detail-empty'
   | 'gui-error-citations'
@@ -66,6 +67,7 @@ export type FluentMessageId =
   | 'gui-related-references'
   | 'gui-show-in-zotero'
   | 'gui-status-count'
+  | 'gui-status-error'
   | 'gui-status-none'
   | 'gui-status-range'
   | 'gui-status-range-capped'
@@ -172,5 +174,6 @@ export type FluentMessageId =
   | 'search-view-table'
   | 'search-window'
   | 'test-failed'
+  | 'test-no-key'
   | 'test-ok'
   | 'test-running';
