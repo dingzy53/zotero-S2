@@ -2,7 +2,7 @@
   "name": "zotero-s2",
   "private": true,
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Semantic Scholar for Zotero 10, served to AI agents over MCP",
   "keywords": [
     "zotero",
