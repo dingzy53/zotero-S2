@@ -105,8 +105,8 @@ const collectionRef: JSONSchema = {
 };
 const s2Filters: Record<string, JSONSchema> = {
   year: {
-    type: "string",
-    description: 'Year or range, e.g. "2019", "2016-2020", "2010-".',
+    type: ["string", "integer"],
+    description: 'Year or range, e.g. 2019, "2019", "2016-2020", "2010-".',
   },
   publicationDateOrYear: {
     type: "string",
@@ -131,7 +131,7 @@ const s2Filters: Record<string, JSONSchema> = {
 
 function s2FilterQuery(args: Record<string, any>) {
   return {
-    year: args.year,
+    year: args.year !== undefined ? String(args.year) : undefined,
     publicationDateOrYear: args.publicationDateOrYear,
     fieldsOfStudy: args.fieldsOfStudy,
     publicationTypes: args.publicationTypes,
@@ -511,7 +511,7 @@ export const TOOLS: ToolDef[] = [
     name: "s2_recommend",
     title: "Recommend related papers",
     description:
-      "Paper recommendations. One positive id → recommendations for that paper; several positive and/or negative ids → recommendations from example lists.",
+      "Paper recommendations (Semantic Scholar's recommendation pools mainly cover computer science papers). One positive id → recommendations for that paper; several positive and/or negative ids → recommendations from example lists.",
     inputSchema: {
       type: "object",
       properties: {
@@ -532,7 +532,8 @@ export const TOOLS: ToolDef[] = [
           type: "string",
           enum: ["recent", "all-cs"],
           default: "recent",
-          description: "Candidate pool (single-paper mode only).",
+          description:
+            'Candidate pool (single-paper mode only). "recent" can return empty; try "all-cs" (covers computer science only).',
         },
         fields: fieldsOverride,
       },
@@ -559,9 +560,15 @@ export const TOOLS: ToolDef[] = [
               limit: args.limit,
               ...fields,
             });
-      return {
-        papers: papersOut(res.recommendedPapers ?? [], !!args.fields),
-      };
+      const papers = papersOut(res.recommendedPapers ?? [], !!args.fields);
+      if (papers.length === 0) {
+        const note =
+          pos.length === 1 && !neg.length && args.pool === "recent"
+            ? 'No recent recommendations found for this paper. Try pool "all-cs" (Semantic Scholar recommendations mainly cover computer science papers).'
+            : "No recommendations found. Semantic Scholar recommendations mainly cover computer science papers.";
+        return { papers, note };
+      }
+      return { papers };
     },
   },
   {
@@ -649,7 +656,7 @@ export const TOOLS: ToolDef[] = [
         query: args.query,
         limit: args.limit,
         paperIds,
-        year: args.year,
+        year: args.year !== undefined ? String(args.year) : undefined,
         publicationDateOrYear: args.publicationDateOrYear,
         fieldsOfStudy: args.fieldsOfStudy,
         venue: args.venue,
@@ -749,7 +756,7 @@ export const TOOLS: ToolDef[] = [
     name: "zotero_find_in_library",
     title: "Check whether papers are in Zotero",
     description:
-      "For each id, report the matching Zotero item (by DOI, arXiv id, S2 id or title+year) and its collections and PDF status. Ids that need it are resolved via one S2 batch call.",
+      "For each id (not titles — use s2_match_title first to resolve a title to an id), report the matching Zotero item (by DOI, arXiv id, S2 id or title+year) and its collections and PDF status. Ids that need it are resolved via one S2 batch call.",
     inputSchema: {
       type: "object",
       properties: {
@@ -775,20 +782,22 @@ export const TOOLS: ToolDef[] = [
       const lib = resolveLibraryID(args.library_id);
       const parsed = (args.ids as string[]).map(parseIdentifier);
       let papers: Array<S2Paper | null> = parsed.map(() => null);
+      let rejected = new Set<number>();
       let warning: string | undefined;
       if (args.resolve_via_s2) {
         // The library check still works without S2 (e.g. no API key yet)
         try {
-          papers = (
-            await batchLookup(
-              ctx,
-              parsed,
-              "paperId,corpusId,externalIds,title,year",
-            )
-          ).papers;
+          ({ papers, rejected } = await batchLookup(
+            ctx,
+            parsed,
+            "paperId,corpusId,externalIds,title,year",
+          ));
         } catch (e) {
           if (!(e instanceof S2Error)) throw e;
-          warning = `Matched by the given ids only; Semantic Scholar lookup failed: ${e.message}`;
+          warning =
+            e.status === 400
+              ? `Matched by the given ids only; Semantic Scholar lookup failed: ${e.message}. zotero_find_in_library takes paper ids, not titles (use s2_match_title first).`
+              : `Matched by the given ids only; Semantic Scholar lookup failed: ${e.message}`;
         }
       }
       const results = [];
@@ -805,6 +814,10 @@ export const TOOLS: ToolDef[] = [
               ? await describeItemWithAttachments(item)
               : describeItem(item)
             : null,
+          ...(rejected.has(i) &&
+            !item && {
+              error: `${NOT_AN_S2_ID} (use s2_match_title first for titles)`,
+            }),
         });
       }
       return warning ? { warning, results } : { results };

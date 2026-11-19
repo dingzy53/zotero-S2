@@ -608,6 +608,30 @@ describe("zotero_find_in_library", function () {
     assert.match(res.warning, /No Semantic Scholar API key/);
     assert.isTrue(res.results[0].inLibrary);
   });
+
+  it("tells agents to use s2_match_title when given a title instead of an id", async function () {
+    const tool = TOOLS_BY_NAME.get("zotero_find_in_library")!;
+    const s2 = new S2Client({
+      apiKey: () => "k",
+      limiter: new RateLimiter(0),
+      transport: async (_m, _u, _h, body) => {
+        const { ids } = JSON.parse(body!);
+        if (ids.some((id: string) => id.includes(" "))) {
+          return response(400, { error: "No valid paper ids given" });
+        }
+        return response(200, [DEEP_LEARNING]);
+      },
+    });
+    const mixed = (await tool.handler(
+      prepareArgs(tool.inputSchema, {
+        ids: ["Attention Is All You Need", "DOI:10.1038/nature14539"],
+      }),
+      context(s2),
+    )) as any;
+    assert.isFalse(mixed.results[0].inLibrary);
+    assert.match(mixed.results[0].error, /s2_match_title/);
+    assert.isTrue(mixed.results[1].inLibrary);
+  });
 });
 
 describe("s2_get_papers", function () {
@@ -1301,7 +1325,47 @@ describe("tool schemas", function () {
     const tool = TOOLS_BY_NAME.get("zotero_list_collections")!;
     assert.throws(
       () => prepareArgs(tool.inputSchema, { bogus: 1 }),
-      /Unknown argument "bogus"/,
+      /Unknown argument "bogus"\. Accepted arguments: library_id/,
     );
+    assert.throws(
+      () => prepareArgs(tool.inputSchema, { libraryID: 1 }),
+      /Unknown argument "libraryID"\. Did you mean "library_id"\? Accepted arguments: library_id/,
+    );
+  });
+
+  it("accepts integer year filters and explains empty s2_recommend results", async function () {
+    const calls: string[] = [];
+    await runTool(
+      "s2_search_papers",
+      { query: "attention", year: 2020 },
+      calls,
+    );
+    await runTool(
+      "s2_search_papers_bulk",
+      { query: "attention", year: 2021 },
+      calls,
+    );
+    await runTool(
+      "s2_snippet_search",
+      { query: "attention", year: 2022 },
+      calls,
+    );
+    assert.match(calls[0], /year=2020/);
+    assert.match(calls[1], /year=2021/);
+    assert.match(calls[2], /year=2022/);
+
+    const recTool = TOOLS_BY_NAME.get("s2_recommend")!;
+    const emptyS2 = new S2Client({
+      apiKey: () => "k",
+      limiter: new RateLimiter(0),
+      transport: async () => response(200, { recommendedPapers: [] }),
+    });
+    const rec = (await recTool.handler(
+      prepareArgs(recTool.inputSchema, { positive_ids: [ATTENTION.paperId] }),
+      context(emptyS2),
+    )) as any;
+    assert.deepEqual(rec.papers, []);
+    assert.match(rec.note, /all-cs/);
+    assert.match(rec.note, /computer science/i);
   });
 });

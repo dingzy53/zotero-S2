@@ -1,6 +1,6 @@
 # PLAN: install the stdio bridge from a packed .xpi
 
-> Branch `fix/agent-usage-findings`. Written 2026-11-15. Not fixed yet.
+> Branch `fix/agent-usage-findings`. Written 2026-11-15. Fixed on this branch (`src/modules/bridge.ts` now uses `Zotero.File.getResourceAsync`, tested in `test/startup.test.ts`).
 
 ## Symptom
 
@@ -32,7 +32,9 @@ The scaffold test profile loads the plugin unpacked (`file://` rootURI), which i
 
 The bridge was copied by hand from `addon/content/bridge/` to `~/Zotero/zotero-s2/`. Until the fix ships, that copy is not refreshed on plugin updates.
 
-# Findings from install, human and agent testing (2026-11-15, not fixed)
+# Findings from install, human and agent testing (2026-11-15)
+
+> Critical bugs fixed on this branch: #1 (`<token>` help text), #3 (Cmd/Ctrl+W closes search window), #4 (error shown in empty results pane instead of stale placeholder), #6 (empty-key Test button message), #9 (Abstract heading & prefix cleanup), #10 (`s2_recommend` empty-result note & CS pool docs), #11 (unknown-argument error lists valid names & closest match), #13 (`year` accepts integers), #14 (`zotero_find_in_library` title hint). Remaining items (#2, #5, #7, #8, #12, #15, #16) are tracked below for follow-up PRs.
 
 Tested with the 0.1.0 build in Zotero 10.0.9 on macOS: settings pane, search window and MCP over HTTP and through the stdio bridge, with no API key set at first. Screenshots are in `.screenshots/` (untracked, listed in `.git/info/exclude`).
 
