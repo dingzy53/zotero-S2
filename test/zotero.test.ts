@@ -156,6 +156,15 @@ describe("zotero_move_items", function () {
         assert.deepEqual(row.added, []);
         assert.deepEqual(row.removed, []);
       }
+      // Duplicate collection refs deduplicate to a single entry
+      const dupes = await runTool("zotero_move_items", {
+        item_keys: [items[1].key],
+        add_to: [from.key, `${ROOT}/Move`],
+        remove_from: [sub.key, `${ROOT}/Move/Sub`],
+      });
+      assert.deepEqual(dupes.results[0].added, [from.key]);
+      assert.deepEqual(dupes.results[0].removed, [sub.key]);
+      assert.deepEqual(dupes.results[0].collections, [from.key]);
       // Out of its last collection, an item stays in the library
       await runTool("zotero_move_items", {
         item_keys: [items[0].key],
@@ -198,13 +207,21 @@ describe("zotero_move_items", function () {
         { add_to: [`${ROOT}/Move/New`], create_collections: false },
         /add_to\) not found/,
       );
+      await fails(
+        { add_to: [`${ROOT}/Move/ShouldNotCreate`, "/"] },
+        /Collection path is empty/,
+      );
       await fails({ item_keys: ["NOSUCH22"], add_to: [home.key] }, /not found/);
       assert.deepEqual(keysOf(item), [home.key]);
+      const cols = (await runTool("zotero_list_collections", {})).collections;
       assert.isNull(
-        (await runTool("zotero_list_collections", {})).collections.find(
-          (c: any) => c.path === `${ROOT}/Move/New`,
-        ) ?? null,
+        cols.find((c: any) => c.path === `${ROOT}/Move/New`) ?? null,
         "no collection was created by a failed call",
+      );
+      assert.isNull(
+        cols.find((c: any) => c.path === `${ROOT}/Move/ShouldNotCreate`) ??
+          null,
+        "no partial add_to collection was created before an empty path failed",
       );
     } finally {
       await item.eraseTx();
@@ -917,6 +934,21 @@ describe("adding PDF files", function () {
       collection: collection.key,
     });
     assert.notProperty(plain.items[0], "attachments");
+
+    // Web-link attachments and missing-on-disk files must report path: null
+    const linkAtt = await Zotero.Attachments.linkFromURL({
+      url: "https://example.org/paper",
+      parentItemID: parent.id,
+      title: "Publisher link",
+    });
+    created.push(linkAtt.id);
+    await IOUtils.remove(att.path);
+    const afterMissing = (await find(true)).results[0].item.attachments;
+    const byKey = new Map<string, any>(
+      afterMissing.map((a: any) => [a.key, a]),
+    );
+    assert.isNull(byKey.get(added.attachmentKey).path);
+    assert.isNull(byKey.get(linkAtt.key).path);
   });
 
   it("attaches a local file to a parent, once per distinct file", async function () {
@@ -1210,9 +1242,21 @@ describe("adding PDF files", function () {
         file.message,
         'zotero_add_pdf_file with path "/home/me/My Papers/a.pdf"',
       );
+      const winFile = await runTool("zotero_add_pdf_from_url", {
+        url: "file:///C:/Users/paper.pdf",
+      }).catch((e) => e);
+      assert.instanceOf(winFile, ToolError);
+      assert.include(
+        winFile.message,
+        'zotero_add_pdf_file with path "C:/Users/paper.pdf"',
+      );
       for (const url of [
         "http://localhost:8765/a.pdf",
         "http://127.0.0.1:8765/a.pdf",
+        "http://127.0.0.2/a.pdf",
+        "http://0.0.0.0:8000/a.pdf",
+        "http://user@127.0.0.1/a.pdf",
+        "http://[::1]:8080/a.pdf",
       ]) {
         const local = await runTool("zotero_add_pdf_from_url", { url }).catch(
           (e) => e,

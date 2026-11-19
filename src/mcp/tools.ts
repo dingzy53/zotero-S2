@@ -13,11 +13,14 @@ import {
   listCollections,
   resolveCollection,
   resolveLibraryID,
+  splitCollectionPath,
 } from "../zotero/collections";
 import {
   describeItem,
+  describeItemWithAttachments,
   findExisting,
   itemArxiv,
+  itemCollectionKeys,
   itemDOI,
   itemS2Id,
   itemYear,
@@ -729,13 +732,16 @@ export const TOOLS: ToolDef[] = [
             b.getField("title") as string,
           ),
         );
+      const page = items.slice(args.offset, args.offset + args.limit);
       return {
         collection: describeCollection(collection),
         total: items.length,
         offset: args.offset,
-        items: items
-          .slice(args.offset, args.offset + args.limit)
-          .map((item) => describeItem(item, args.include_attachments)),
+        items: args.include_attachments
+          ? await Promise.all(
+              page.map((item) => describeItemWithAttachments(item)),
+            )
+          : page.map((item) => describeItem(item)),
       };
     },
   },
@@ -773,11 +779,13 @@ export const TOOLS: ToolDef[] = [
       if (args.resolve_via_s2) {
         // The library check still works without S2 (e.g. no API key yet)
         try {
-          papers = await ctx.s2.paperBatch(
-            ctx.stats,
-            parsed.map((p) => p.s2Query),
-            "paperId,corpusId,externalIds,title,year",
-          );
+          papers = (
+            await batchLookup(
+              ctx,
+              parsed,
+              "paperId,corpusId,externalIds,title,year",
+            )
+          ).papers;
         } catch (e) {
           if (!(e instanceof S2Error)) throw e;
           warning = `Matched by the given ids only; Semantic Scholar lookup failed: ${e.message}`;
@@ -792,7 +800,11 @@ export const TOOLS: ToolDef[] = [
         results.push({
           id: args.ids[i],
           inLibrary: !!item,
-          item: item ? describeItem(item, args.include_attachments) : null,
+          item: item
+            ? args.include_attachments
+              ? await describeItemWithAttachments(item)
+              : describeItem(item)
+            : null,
         });
       }
       return warning ? { warning, results } : { results };
@@ -885,6 +897,7 @@ export const TOOLS: ToolDef[] = [
         try {
           // A parallel call must not create the same item between our check and create
           const item = await libraryWrites.run(async () => {
+            if (Date.now() >= ctx.deadline) throw new ToolError(OUT_OF_TIME);
             const found = await findExisting(
               lib,
               paper ? idsFromPaper(paper) : byId!,
@@ -1017,14 +1030,19 @@ export const TOOLS: ToolDef[] = [
       }
       // Check everything before the first write, so a typo changes nothing
       const items = (args.item_keys as string[]).map((k) => getItem(lib, k));
-      const removeFrom = removeRefs.map((ref) => {
-        const collection = findCollection(lib, ref);
-        if (!collection) {
-          throw new ToolError(`Collection "${ref}" (remove_from) not found`);
-        }
-        return collection;
-      });
-      const addTo: Zotero.Collection[] = [];
+      const dedupeCollections = (list: Zotero.Collection[]) => {
+        const seen = new Set<number>();
+        return list.filter((c) => !seen.has(c.id) && !!seen.add(c.id));
+      };
+      const removeFrom = dedupeCollections(
+        removeRefs.map((ref) => {
+          const collection = findCollection(lib, ref);
+          if (!collection) {
+            throw new ToolError(`Collection "${ref}" (remove_from) not found`);
+          }
+          return collection;
+        }),
+      );
       for (const ref of addRefs) {
         const existing = findCollection(lib, ref);
         if (existing && removeFrom.some((c) => c.id === existing.id)) {
@@ -1032,13 +1050,23 @@ export const TOOLS: ToolDef[] = [
             `Collection "${ref}" is in both add_to and remove_from`,
           );
         }
-        if (!existing && !args.create_collections) {
-          throw new ToolError(`Collection "${ref}" (add_to) not found`);
+        if (!existing) {
+          if (!args.create_collections) {
+            throw new ToolError(`Collection "${ref}" (add_to) not found`);
+          }
+          if (!splitCollectionPath(ref).length) {
+            throw new ToolError("Collection path is empty");
+          }
         }
       }
+      const resolvedAddTo: Zotero.Collection[] = [];
       for (const ref of addRefs) {
-        addTo.push((await resolveCollection(lib, ref, true)).collection);
+        resolvedAddTo.push(
+          (await resolveCollection(lib, ref, args.create_collections))
+            .collection,
+        );
       }
+      const addTo = dedupeCollections(resolvedAddTo);
 
       const results = [];
       for (const item of items) {
@@ -1054,7 +1082,7 @@ export const TOOLS: ToolDef[] = [
               itemKey: item.key,
               added: added.map((c) => c.key),
               removed: removed.map((c) => c.key),
-              collections: describeItem(item).collections,
+              collections: itemCollectionKeys(item),
             };
           }),
         );

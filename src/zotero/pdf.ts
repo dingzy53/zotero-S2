@@ -63,21 +63,21 @@ async function attachOnce(
   item: Zotero.Item,
   paper?: S2Paper | null,
 ): Promise<PdfStatus> {
-  if (hasPDF(item)) return "already";
-
-  const resolvers: UrlResolver[] = [];
-  const oaURL = paper?.openAccessPdf?.url;
-  if (oaURL) resolvers.push({ url: oaURL, accessMethod: "Semantic Scholar" });
-  const arxiv = paper?.externalIds?.ArXiv || itemArxiv(item);
-  if (arxiv) {
-    resolvers.push({
-      url: `https://arxiv.org/pdf/${arxiv}`,
-      accessMethod: "arXiv",
-    });
-  }
-  resolvers.push(...Attachments().getFileResolvers(item));
-
   try {
+    if (hasPDF(item)) return "already";
+
+    const resolvers: UrlResolver[] = [];
+    const oaURL = paper?.openAccessPdf?.url;
+    if (oaURL) resolvers.push({ url: oaURL, accessMethod: "Semantic Scholar" });
+    const arxiv = paper?.externalIds?.ArXiv || itemArxiv(item);
+    if (arxiv) {
+      resolvers.push({
+        url: `https://arxiv.org/pdf/${arxiv}`,
+        accessMethod: "arXiv",
+      });
+    }
+    resolvers.push(...Attachments().getFileResolvers(item));
+
     const attachment = await downloads.run(async () =>
       // Something else may have attached one while we waited for a slot
       hasPDF(item) ? "already" : Attachments().addFileFromURLs(item, resolvers),
@@ -332,9 +332,18 @@ function describeRequestError(e: unknown): string {
 const BOT_CHECK =
   /not a (ro)?bot|just a moment|captcha|are you (a )?(human|robot)|verif(y|ying) (you|that)|access denied|attention required|security check|checking your browser/i;
 
+function fromCodePointSafe(raw: string, code: number): string {
+  return Number.isInteger(code) && code >= 0 && code <= 0x10ffff
+    ? String.fromCodePoint(code)
+    : raw;
+}
+
 function decodeEntities(text: string): string {
   return text
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (raw, hex) =>
+      fromCodePointSafe(raw, parseInt(hex, 16)),
+    )
+    .replace(/&#(\d+);/g, (raw, n) => fromCodePointSafe(raw, Number(n)))
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&lt;/g, "<")
@@ -358,6 +367,7 @@ async function probePage(
       errorDelayMax: 0,
       timeout: 15_000,
     } as any);
+    if (!xhr.status) return null;
     const host = new URL(xhr.responseURL || url).host;
     const type = xhr.getResponseHeader("Content-Type") ?? "";
     if (!/html/i.test(type)) {
@@ -417,12 +427,15 @@ function failureLog() {
   };
 }
 
-/** Zotero downloads over https only; a local file needs the other tool. */
+/** Zotero downloads over http(s) only; a local file needs the other tool. */
 function checkDownloadURL(url: string): void {
   if (/^file:\/\//i.test(url)) {
     let path = "";
     try {
-      path = decodeURIComponent(new URL(url).pathname);
+      path = decodeURIComponent(new URL(url).pathname).replace(
+        /^\/([A-Za-z]:\/)/,
+        "$1",
+      );
     } catch {
       // Leave the path out of the message
     }
@@ -431,7 +444,22 @@ function checkDownloadURL(url: string): void {
     );
   }
   if (!/^https?:\/\//i.test(url)) throw new ToolError("url must be http(s)");
-  if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/i.test(url)) {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new ToolError("url must be a valid http(s) URL");
+  }
+  const host = parsed.hostname.toLowerCase();
+  const isLoopback =
+    host === "localhost" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host === "0.0.0.0" ||
+    host === "0:0:0:0:0:0:0:1" ||
+    host === "[0:0:0:0:0:0:0:1]" ||
+    /^127\./.test(host);
+  if (isLoopback) {
     throw new ToolError(
       "Zotero can't download from a server on this computer. For a PDF that is already on disk, use zotero_add_pdf_file with its path.",
     );

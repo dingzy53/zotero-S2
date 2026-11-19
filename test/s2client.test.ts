@@ -291,6 +291,41 @@ describe("S2Client", function () {
     assert.equal(stats.s2Calls, 0);
   });
 
+  it("fails promptly when a rate-limit pause exceeds the deadline", async function () {
+    const { s2, clock, seen, limiter } = client([
+      async () => response(200, { data: [] }),
+    ]);
+    limiter.pause(60_000);
+    const start = clock.now();
+    const stats = newStats(start + 50_000);
+    const err = await s2.searchPapers(stats, { query: "x" }).catch((e) => e);
+    assert.instanceOf(err, S2Error);
+    assert.match(err.message, /queued.*call again/);
+    assert.deepEqual(clock.sleeps, []);
+    assert.lengthOf(seen, 0);
+    assert.equal(stats.s2Calls, 0);
+    // An unmade call must not delay later callers after the pause ends
+    clock.sleeps.length = 0;
+    await s2.searchPapers(newStats(), { query: "y" });
+    assert.deepEqual(clock.sleeps, [60_000]);
+  });
+
+  it("keeps the last status and skips sleeping when <1 s remains after backoff", async function () {
+    const { s2, clock, seen } = client([
+      async () => response(429, { message: "Too Many Requests" }),
+    ]);
+    const start = clock.now();
+    const stats = newStats(start + 1500);
+    const err = await s2.searchPapers(stats, { query: "x" }).catch((e) => e);
+    assert.instanceOf(err, S2Error);
+    assert.equal(err.status, 429);
+    assert.equal(err.attempts, 1);
+    assert.equal(stats.retries, 0);
+    assert.match(err.message, /rate-limiting/);
+    assert.deepEqual(clock.sleeps, []);
+    assert.lengthOf(seen, 1);
+  });
+
   it("does not retry 4xx and explains auth failures", async function () {
     const { s2 } = client([
       async () => response(403, { message: "Forbidden" }),

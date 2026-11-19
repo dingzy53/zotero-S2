@@ -152,6 +152,8 @@ export class S2Client {
     }
 
     const { deadline } = stats;
+    const latestStart =
+      deadline !== undefined ? deadline - MIN_TIMEOUT_MS : undefined;
     const outOfTime = (status: number | null, attempts: number) => {
       const why = !attempts
         ? "requests are queued (1 per second, shared by all calls) and this one's turn came too late"
@@ -165,33 +167,31 @@ export class S2Client {
       );
     };
 
+    let lastStatus: number | null = null;
     for (let attempt = 0; ; attempt++) {
       let res: TransportResponse | null = null;
       let networkError: unknown = null;
-      // Decided when our slot comes up: the queue may have used up the budget
-      let skipped = false;
+      let ran = false;
       try {
-        res = await this.limiter.schedule(async () => {
-          if (deadline === undefined) {
-            return this.transport(method, fullURL, headers, body);
-          }
-          const left = deadline - this.now();
-          if (left < MIN_TIMEOUT_MS) {
-            skipped = true;
-            return null;
-          }
-          return this.transport(
-            method,
-            fullURL,
-            headers,
-            body,
-            Math.min(TRANSPORT_TIMEOUT_MS, left),
-          );
-        });
+        res =
+          (await this.limiter.schedule(async () => {
+            ran = true;
+            if (deadline === undefined) {
+              return this.transport(method, fullURL, headers, body);
+            }
+            const left = Math.max(MIN_TIMEOUT_MS, deadline - this.now());
+            return this.transport(
+              method,
+              fullURL,
+              headers,
+              body,
+              Math.min(TRANSPORT_TIMEOUT_MS, left),
+            );
+          }, latestStart)) ?? null;
       } catch (e) {
         networkError = e;
       }
-      if (skipped) throw outOfTime(null, attempt);
+      if (!ran) throw outOfTime(lastStatus, attempt);
       stats.s2Calls++;
 
       if (res && res.status >= 200 && res.status < 300) return res.body;
@@ -221,8 +221,12 @@ export class S2Client {
       const delay = backoffDelay(attempt, retryAfterHeader, this.random);
       // A 429 is about the key, not this request: hold every caller back
       if (res?.status === 429) this.limiter.pause(delay);
-      // Sleeping past the deadline can't produce an answer the client reads
-      if (deadline !== undefined && this.now() + delay > deadline) {
+      lastStatus = status;
+      // Sleeping when < MIN_TIMEOUT_MS remains can't produce an answer the client reads
+      if (
+        deadline !== undefined &&
+        this.now() + delay + MIN_TIMEOUT_MS > deadline
+      ) {
         throw outOfTime(status, attempt + 1);
       }
       stats.retries++;

@@ -134,7 +134,7 @@ Before you report work as done, run `npm run build`, `npm run lint:check`, and `
 - The activity log stores long string arguments (such as base64 PDFs) as `<N chars>`, never their content.
 - Find-or-create runs under `libraryWrites` (`src/zotero/writeLock.ts`): `resolveCollection()` and each item in `zotero_add_papers` (find, create, tags, note). Agents call tools in parallel, and two calls that both miss would both create. The lock isn't reentrant, so never take it while holding it, and keep PDF downloads outside it.
 - No tool deletes or trashes an item or a collection. `zotero_move_items` only changes collection membership, and checks every argument before its first write. Deleting stays in the Zotero UI; don't add it without the owner agreeing.
-- `describeItem(item, true)` lists attachments with absolute file paths (the owner accepted that this shows the data directory). Tools expose it only behind `include_attachments`. Don't pass `describeItem` straight to `.map()`: the index would land in that flag.
+- `describeItemWithAttachments(item)` lists attachments with absolute file paths (the owner accepted that this shows the data directory). Tools expose it only behind `include_attachments`. Keep `describeItem(item)` single-argument so callers can pass it straight to `.map()`.
 - Target `libraryID` and collections explicitly. Never read the UI selection. In Zotero 10 the singular selection getters throw.
 
 **Search window (`src/gui/`)**

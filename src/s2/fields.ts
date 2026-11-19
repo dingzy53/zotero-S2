@@ -78,7 +78,7 @@ export function compactPaper(p: S2Paper | null) {
  */
 export function trimRawPaper<T extends S2Paper | null | undefined>(p: T): T {
   const oa = p?.openAccessPdf as Record<string, unknown> | null | undefined;
-  if (!p || !oa || !("disclaimer" in oa)) return p;
+  if (!p || !oa || typeof oa !== "object" || !("disclaimer" in oa)) return p;
   const { disclaimer: _dropped, ...rest } = oa;
   return { ...p, openAccessPdf: rest };
 }
