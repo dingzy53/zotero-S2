@@ -88,6 +88,7 @@ export function fixtureClient(
           });
     }
     if (url.includes("/paper/search")) return response(200, paged(papers));
+    if (url.includes("/snippet/search")) return response(200, { data: [] });
     if (url.includes("/author/search")) {
       return response(
         200,

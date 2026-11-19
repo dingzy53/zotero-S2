@@ -88,10 +88,14 @@ describe("settings pane", function () {
       Zotero.Prefs.get(`${prefix}resultsView`, true),
     );
 
-    const help = doc.querySelector('[data-l10n-id="pref-mcp-help"]')!;
-    await doc.l10n?.translateElements([help]);
-    assert.include(help.textContent ?? "", "Bearer");
-    assert.include(help.textContent ?? "", "token");
+    const help = await waitFor(
+      () =>
+        doc.querySelector(`[data-l10n-id="${config.addonRef}-pref-mcp-help"]`)
+          ?.textContent,
+      "mcp help text",
+    );
+    assert.include(help, "Bearer");
+    assert.include(help, "token");
 
     const savedKey = Zotero.Prefs.get(`${prefix}apiKey`, true);
     const keyInput = doc.getElementById(id("apikey")) as HTMLInputElement;
