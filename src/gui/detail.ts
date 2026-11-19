@@ -123,6 +123,11 @@ export function authorsList(
   );
 }
 
+function cleanAbstract(text: string): string {
+  const stripped = text.replace(/^abstract(?::|\s)+/i, "").trim();
+  return stripped || text;
+}
+
 /** The pane beside the table: everything we know about one paper. */
 export function renderDetail(
   doc: Document,
@@ -158,9 +163,15 @@ export function renderDetail(
       }),
     outcome && el(doc, "div", { class: "s2-outcome", text: outcome }),
     actionButtons(doc, p, actions, itemKey),
+    el(doc, "h3", {
+      class: "s2-detail-heading",
+      text: getString("gui-detail-abstract"),
+    }),
     el(doc, "p", {
       class: p.abstract ? "s2-abstract" : "s2-abstract s2-muted",
-      text: p.abstract || getString("gui-no-abstract"),
+      text: p.abstract
+        ? cleanAbstract(p.abstract)
+        : getString("gui-no-abstract"),
     }),
     idLinks(doc, p),
   ];

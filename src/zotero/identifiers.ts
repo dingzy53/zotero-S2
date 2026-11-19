@@ -52,7 +52,7 @@ export function normalizeTitle(title: string): string {
     .trim();
 }
 
-/** Accepts S2 ids, `DOI:`/`ARXIV:`/`CorpusId:` prefixes, bare DOIs/arXiv ids, and doi.org / arxiv.org URLs. */
+/** Accepts S2 ids, `DOI:`/`ARXIV:`/`CorpusId:` prefixes, bare DOIs/arXiv ids, and doi.org / arxiv.org URLs (with or without `URL:`). */
 export function parseIdentifier(raw: string): ParsedId {
   const input = raw.trim();
   const prefixed = /^([A-Za-z]+):(.+)$/.exec(input);
@@ -69,6 +69,13 @@ export function parseIdentifier(raw: string): ParsedId {
       }
       case "corpusid":
         return { corpusId: rest.trim(), s2Query: `CorpusId:${rest.trim()}` };
+      case "url": {
+        // S2 rejects `URL:https://doi.org/…` (400), so read the URL ourselves first
+        const inner = parseIdentifier(rest);
+        return inner.doi || inner.arxiv
+          ? inner
+          : { s2Query: `URL:${rest.trim()}` };
+      }
       default: {
         // Only S2 can resolve these; send its documented prefix spelling
         const s2Prefix = S2_PREFIXES[prefix.toLowerCase()];

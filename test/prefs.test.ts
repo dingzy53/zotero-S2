@@ -49,11 +49,27 @@ describe("settings pane", function () {
     const command = doc.getElementById(id("command")) as HTMLInputElement;
     assert.include(command.value, `Bearer ${saved}`);
 
+    // The stdio command points at a bridge file that startup has written
+    const stdio = doc.getElementById(id("command-stdio")) as HTMLInputElement;
+    assert.include(stdio.value, `-e ZOTERO_S2_TOKEN=${saved}`);
+    // The test Zotero isn't on the default port, so the URL is spelled out
+    assert.include(stdio.value, `-e ZOTERO_S2_URL=${endpoint.value}`);
+    const bridge = /-- node "(.+)"$/.exec(stdio.value)![1];
+    assert.isTrue(bridge.startsWith(Zotero.DataDirectory.dir));
+    // Startup writes it in the background
+    let script = "";
+    for (let i = 0; i < 50 && !script; i++) {
+      script = await IOUtils.readUTF8(bridge).catch(() => "");
+      if (!script) await Zotero.Promise.delay(100);
+    }
+    assert.include(script, "ZOTERO_S2_TOKEN");
+
     (doc.getElementById(id("regenerate")) as any).doCommand();
     const fresh = Zotero.Prefs.get(`${prefix}mcpToken`, true) as string;
     assert.notEqual(fresh, saved);
     assert.match(fresh, /^[0-9a-f]{64}$/);
     assert.equal(token.value, fresh);
+    assert.include(stdio.value, fresh);
 
     // Restore the fixed test token used by the HTTP checks
     Zotero.Prefs.set(`${prefix}mcpToken`, saved, true);
@@ -71,5 +87,29 @@ describe("settings pane", function () {
       (doc.getElementById(id("view")) as any).value,
       Zotero.Prefs.get(`${prefix}resultsView`, true),
     );
+
+    const help = await waitFor(
+      () =>
+        doc.querySelector(`[data-l10n-id="${config.addonRef}-pref-mcp-help"]`)
+          ?.textContent,
+      "mcp help text",
+    );
+    assert.include(help, "Bearer");
+    assert.include(help, "token");
+
+    const savedKey = Zotero.Prefs.get(`${prefix}apiKey`, true);
+    const keyInput = doc.getElementById(id("apikey")) as HTMLInputElement;
+    Zotero.Prefs.set(`${prefix}apiKey`, "", true);
+    keyInput.value = "";
+    try {
+      (doc.getElementById(id("test")) as any).doCommand();
+      assert.equal(
+        doc.getElementById(id("test-result"))!.textContent,
+        "Enter an API key first.",
+      );
+    } finally {
+      if (savedKey === undefined) Zotero.Prefs.clear(`${prefix}apiKey`, true);
+      else Zotero.Prefs.set(`${prefix}apiKey`, savedKey, true);
+    }
   });
 });

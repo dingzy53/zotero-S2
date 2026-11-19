@@ -1,4 +1,5 @@
-import { config, version } from "../../package.json";
+import { config } from "../../package.json";
+import { BUILD } from "../utils/build";
 import { getPref } from "../utils/prefs";
 import { S2Client } from "../s2/client";
 import { createMcpHandler } from "../mcp/server";
@@ -14,6 +15,7 @@ const INSTRUCTIONS = [
   "Semantic Scholar is limited to 1 request/second (shared by all calls; the server queues and retries), so prefer batch tools: s2_get_papers takes up to 500 ids, zotero_add_papers up to 25.",
   "Typical flow: s2_search_papers → zotero_add_papers with ids and a collection.",
   'Collections may be given by key or slash path ("Project/Reading"); zotero_add_papers creates missing collections and reuses items already in the library.',
+  "To reorganize, zotero_move_items adds items to collections and removes them from collections (it never deletes anything). To read an item's PDF, ask zotero_list_collection_items or zotero_find_in_library for include_attachments and open the returned path.",
   "PDFs: zotero_add_papers and zotero_attach_pdf find open-access copies. For anything else, give zotero_add_pdf_from_url a PDF or landing-page URL, or, if you can download the file yourself, give zotero_add_pdf_file a local path or base64 bytes.",
 ].join(" ");
 
@@ -22,8 +24,9 @@ type Reply = [number, Record<string, string>, string];
 const s2 = new S2Client({ apiKey: () => getPref("apiKey") || "" });
 
 const mcp = createMcpHandler({
-  name: config.addonName,
-  version,
+  name: BUILD.name,
+  version: BUILD.version,
+  buildTime: BUILD.buildTime,
   instructions: INSTRUCTIONS,
   tools: () => TOOLS,
   callTool: (tool, args) => runTool(tool, args, s2, "mcp"),
@@ -106,6 +109,7 @@ const ENDPOINTS: Record<string, unknown> = {
   [MCP_PATH]: makeEndpoint(["GET", "POST", "DELETE"], (req) => mcp(req)),
   [TOOLS_PATH]: makeEndpoint(["GET"], async () =>
     json(200, {
+      server: BUILD,
       tools: TOOLS.map((t) => ({
         name: t.name,
         description: t.description,

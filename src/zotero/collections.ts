@@ -35,7 +35,7 @@ function childrenOf(libraryID: number, parent: Zotero.Collection | null) {
     : Zotero.Collections.getByLibrary(libraryID);
 }
 
-function splitPath(path: string): string[] {
+export function splitCollectionPath(path: string): string[] {
   return path
     .split("/")
     .map((s) => s.trim())
@@ -53,7 +53,7 @@ export function findCollection(
     if (byKey) return byKey as Zotero.Collection;
   }
   let current: Zotero.Collection | null = null;
-  for (const name of splitPath(trimmed)) {
+  for (const name of splitCollectionPath(trimmed)) {
     const siblings = childrenOf(libraryID, current);
     const next: Zotero.Collection | undefined =
       siblings.find((c) => c.name === name) ??
@@ -82,7 +82,7 @@ async function resolveUnlocked(
   if (found) return { collection: found, created: false };
   if (!create) throw new ToolError(`Collection "${ref}" not found`);
 
-  const names = splitPath(ref);
+  const names = splitCollectionPath(ref);
   if (!names.length) throw new ToolError("Collection path is empty");
   let current = null as Zotero.Collection | null;
   let created = false;

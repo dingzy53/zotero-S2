@@ -4,6 +4,7 @@ import {
   SEARCH_FIELDS,
   compactPaper,
   compactSnippet,
+  trimRawPaper,
 } from "../s2/fields";
 import { CallStats, S2Paper } from "../s2/types";
 import {
@@ -12,16 +13,20 @@ import {
   listCollections,
   resolveCollection,
   resolveLibraryID,
+  splitCollectionPath,
 } from "../zotero/collections";
 import {
   describeItem,
+  describeItemWithAttachments,
   findExisting,
   itemArxiv,
+  itemCollectionKeys,
   itemDOI,
   itemS2Id,
   itemYear,
 } from "../zotero/dedupe";
 import {
+  ParsedId,
   idsFromPaper,
   normalizeTitle,
   parseIdentifier,
@@ -30,25 +35,29 @@ import {
   MetadataSource,
   addTagsAndNote,
   applyMapped,
+  createFromTranslator,
   createItem,
 } from "../zotero/importer";
 import {
   MAX_PDF_BYTES,
   PdfStatus,
   PdfTarget,
-  attachPDF,
+  attachPDFBy,
   importPDFFile,
   importPDFFromURL,
   writeTempPDF,
 } from "../zotero/pdf";
-import { s2ToZotero } from "../zotero/s2ToZotero";
+import { classifyItemType, s2ToZotero } from "../zotero/s2ToZotero";
 import { libraryWrites } from "../zotero/writeLock";
 import { ToolError, errorMessage } from "./errors";
 import { JSONSchema } from "./schema";
 
 export interface ToolContext {
   s2: S2Client;
+  /** Also carries the deadline into `S2Client.request()`. */
   stats: CallStats;
+  /** Epoch ms by which the call should answer (`TOOL_BUDGET_MS` in runTool). */
+  deadline: number;
 }
 
 export interface ToolDef {
@@ -66,6 +75,8 @@ export interface ToolDef {
 }
 
 export const MAX_ADD = 25;
+/** Collection changes are local and quick, so more items fit in one call. */
+const MAX_MOVE = 100;
 
 // --- shared schema fragments ---
 
@@ -81,6 +92,12 @@ const fieldsOverride: JSONSchema = {
   description:
     "Optional comma-separated S2 fields. If set, raw S2 JSON is returned instead of the compact form.",
 };
+const includeAttachments: JSONSchema = {
+  type: "boolean",
+  default: false,
+  description:
+    "Also list each item's attachments: key, title, filename, contentType and the file's absolute path on the Zotero computer (null if the file isn't on disk).",
+};
 const collectionRef: JSONSchema = {
   type: "string",
   description:
@@ -88,8 +105,8 @@ const collectionRef: JSONSchema = {
 };
 const s2Filters: Record<string, JSONSchema> = {
   year: {
-    type: "string",
-    description: 'Year or range, e.g. "2019", "2016-2020", "2010-".',
+    type: ["string", "integer"],
+    description: 'Year or range, e.g. 2019, "2019", "2016-2020", "2010-".',
   },
   publicationDateOrYear: {
     type: "string",
@@ -114,7 +131,7 @@ const s2Filters: Record<string, JSONSchema> = {
 
 function s2FilterQuery(args: Record<string, any>) {
   return {
-    year: args.year,
+    year: args.year !== undefined ? String(args.year) : undefined,
     publicationDateOrYear: args.publicationDateOrYear,
     fieldsOfStudy: args.fieldsOfStudy,
     publicationTypes: args.publicationTypes,
@@ -125,7 +142,7 @@ function s2FilterQuery(args: Record<string, any>) {
 }
 
 function papersOut(list: Array<S2Paper | null>, raw: boolean) {
-  return raw ? list : list.map(compactPaper);
+  return raw ? list.map(trimRawPaper) : list.map(compactPaper);
 }
 
 function getItem(libraryID: number, key: string): Zotero.Item {
@@ -180,11 +197,66 @@ async function lookupItems(
   return papers;
 }
 
+const NOT_AN_S2_ID =
+  "not a paper id Semantic Scholar accepts; use a DOI, arXiv id, CorpusId or S2 paperId";
+
+/**
+ * One `paperBatch` for all ids. S2 answers 400 for the whole batch when it
+ * can't read one of them, so on a 400 the batch is retried once with only the
+ * id forms S2 always parses, and the others come back in `rejected`. One bad
+ * id must not fail the other 24.
+ */
+async function batchLookup(
+  ctx: ToolContext,
+  parsed: ParsedId[],
+  fields?: string,
+): Promise<{ papers: Array<S2Paper | null>; rejected: Set<number> }> {
+  const query = (indexes: number[]) =>
+    ctx.s2.paperBatch(
+      ctx.stats,
+      indexes.map((i) => parsed[i].s2Query),
+      fields,
+    );
+  const all = parsed.map((_, i) => i);
+  try {
+    return { papers: await query(all), rejected: new Set() };
+  } catch (e) {
+    if (!(e instanceof S2Error) || e.status !== 400) throw e;
+    const safe = all.filter((i) => {
+      const p = parsed[i];
+      return !!(p.doi || p.arxiv || p.s2Id || p.corpusId);
+    });
+    // Nothing to set aside: the 400 is about something else
+    if (safe.length === all.length) throw e;
+    const found = safe.length ? await query(safe) : [];
+    const papers: Array<S2Paper | null> = parsed.map(() => null);
+    safe.forEach((i, j) => (papers[i] = found[j]));
+    return { papers, rejected: new Set(all.filter((i) => !safe.includes(i))) };
+  }
+}
+
 function isSameWork(item: Zotero.Item, paper: S2Paper): boolean {
   const title = normalizeTitle(item.getField("title") as string);
   if (!title || title !== normalizeTitle(paper.title ?? "")) return false;
   const year = itemYear(item);
   return !year || !paper.year || year === paper.year;
+}
+
+/**
+ * Sets the item's type to the one S2's data points to. Skipped when that type
+ * is only the fallback guess: "journal article" for a paper S2 knows little
+ * about must not overwrite a type someone chose.
+ */
+function fixItemType(
+  item: Zotero.Item,
+  paper: S2Paper,
+): { from: string; to: string } | null {
+  const { itemType: to, certain } = classifyItemType(paper);
+  const from = Zotero.ItemTypes.getName(item.itemTypeID);
+  const typeID = Zotero.ItemTypes.getID(to);
+  if (!certain || to === from || !typeID) return null;
+  item.setType(typeID);
+  return { from, to };
 }
 
 // --- tools ---
@@ -215,6 +287,19 @@ async function pdfTarget(
 
 const PDF_HINT =
   "No open copy was found for some items. If you can get the PDF, use zotero_add_pdf_from_url (URL or landing page) or zotero_add_pdf_file (local path or base64).";
+const PENDING_HINT =
+  'Some PDFs are still downloading in Zotero (pdf: "pending"). Call zotero_attach_pdf again with the pending item keys to see the result; nothing is downloaded twice.';
+const OUT_OF_TIME =
+  "not processed: this call ran out of time. Call again with the remaining ids";
+
+/** Advice for the PDF statuses in a result, if any is needed. */
+function pdfHint(rows: Array<{ pdf?: PdfStatus }>): { hint?: string } {
+  const hints = [
+    rows.some((r) => r.pdf === "not_found") && PDF_HINT,
+    rows.some((r) => r.pdf === "pending") && PENDING_HINT,
+  ].filter(Boolean);
+  return hints.length ? { hint: hints.join(" ") } : {};
+}
 
 export const TOOLS: ToolDef[] = [
   {
@@ -301,7 +386,7 @@ export const TOOLS: ToolDef[] = [
     name: "s2_match_title",
     title: "Match paper by title",
     description:
-      "Find the single best Semantic Scholar match for a paper title.",
+      "Find the single best Semantic Scholar match for a paper title. Returns { match: null } when no title matches; that is an answer, not an error.",
     inputSchema: {
       type: "object",
       properties: { title: { type: "string" }, fields: fieldsOverride },
@@ -314,9 +399,10 @@ export const TOOLS: ToolDef[] = [
         args.title,
         args.fields || FULL_FIELDS,
       );
-      if (!best) throw new ToolError("No title match");
+      // A miss is a normal answer; an error would read as a failed call
+      if (!best) return { match: null };
       return args.fields
-        ? best
+        ? trimRawPaper(best)
         : { matchScore: best.matchScore, paper: compactPaper(best) };
     },
   },
@@ -341,19 +427,19 @@ export const TOOLS: ToolDef[] = [
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
     async handler(args, ctx) {
-      const queries = (args.ids as string[]).map(
-        (id) => parseIdentifier(id).s2Query,
-      );
-      const papers = await ctx.s2.paperBatch(
-        ctx.stats,
-        queries,
+      const { papers, rejected } = await batchLookup(
+        ctx,
+        (args.ids as string[]).map(parseIdentifier),
         args.fields || FULL_FIELDS,
       );
       return {
         papers: (args.ids as string[]).map((id, i) => ({
           id,
           found: !!papers[i],
-          paper: args.fields ? papers[i] : compactPaper(papers[i]),
+          paper: args.fields
+            ? trimRawPaper(papers[i])
+            : compactPaper(papers[i]),
+          ...(rejected.has(i) && { error: NOT_AN_S2_ID }),
         })),
       };
     },
@@ -395,8 +481,16 @@ export const TOOLS: ToolDef[] = [
         parseIdentifier(args.paper_id).s2Query,
         { fields, limit: args.limit, offset: args.offset },
       );
-      if (args.fields) return res;
       const key = kind === "citations" ? "citingPaper" : "citedPaper";
+      if (args.fields) {
+        return {
+          ...res,
+          data: (res.data ?? []).map((row: any) => ({
+            ...row,
+            [key]: trimRawPaper(row[key]),
+          })),
+        };
+      }
       return {
         offset: res.offset,
         next: res.next,
@@ -417,7 +511,7 @@ export const TOOLS: ToolDef[] = [
     name: "s2_recommend",
     title: "Recommend related papers",
     description:
-      "Paper recommendations. One positive id → recommendations for that paper; several positive and/or negative ids → recommendations from example lists.",
+      "Paper recommendations (Semantic Scholar's recommendation pools mainly cover computer science papers). One positive id → recommendations for that paper; several positive and/or negative ids → recommendations from example lists.",
     inputSchema: {
       type: "object",
       properties: {
@@ -438,7 +532,8 @@ export const TOOLS: ToolDef[] = [
           type: "string",
           enum: ["recent", "all-cs"],
           default: "recent",
-          description: "Candidate pool (single-paper mode only).",
+          description:
+            'Candidate pool (single-paper mode only). "recent" can return empty; try "all-cs" (covers computer science only).',
         },
         fields: fieldsOverride,
       },
@@ -465,9 +560,15 @@ export const TOOLS: ToolDef[] = [
               limit: args.limit,
               ...fields,
             });
-      return {
-        papers: papersOut(res.recommendedPapers ?? [], !!args.fields),
-      };
+      const papers = papersOut(res.recommendedPapers ?? [], !!args.fields);
+      if (papers.length === 0) {
+        const note =
+          pos.length === 1 && !neg.length && args.pool === "recent"
+            ? 'No recent recommendations found for this paper. Try pool "all-cs" (Semantic Scholar recommendations mainly cover computer science papers).'
+            : "No recommendations found. Semantic Scholar recommendations mainly cover computer science papers.";
+        return { papers, note };
+      }
+      return { papers };
     },
   },
   {
@@ -555,7 +656,7 @@ export const TOOLS: ToolDef[] = [
         query: args.query,
         limit: args.limit,
         paperIds,
-        year: args.year,
+        year: args.year !== undefined ? String(args.year) : undefined,
         publicationDateOrYear: args.publicationDateOrYear,
         fieldsOfStudy: args.fieldsOfStudy,
         venue: args.venue,
@@ -606,7 +707,7 @@ export const TOOLS: ToolDef[] = [
     name: "zotero_list_collection_items",
     title: "List items in a collection",
     description:
-      "Regular items in a collection: key, title, year, authors, DOI, arXiv, S2 id, hasPDF.",
+      "Regular items in a collection: key, title, year, authors, DOI, arXiv, S2 id, hasPDF. Set include_attachments to get each item's files and their paths.",
     inputSchema: {
       type: "object",
       properties: {
@@ -614,6 +715,7 @@ export const TOOLS: ToolDef[] = [
         include_subcollections: { type: "boolean", default: false },
         limit: { type: "integer", minimum: 1, maximum: 500, default: 50 },
         offset: { type: "integer", minimum: 0, default: 0 },
+        include_attachments: includeAttachments,
         library_id: libraryID,
       },
       required: ["collection"],
@@ -637,13 +739,16 @@ export const TOOLS: ToolDef[] = [
             b.getField("title") as string,
           ),
         );
+      const page = items.slice(args.offset, args.offset + args.limit);
       return {
         collection: describeCollection(collection),
         total: items.length,
         offset: args.offset,
-        items: items
-          .slice(args.offset, args.offset + args.limit)
-          .map(describeItem),
+        items: args.include_attachments
+          ? await Promise.all(
+              page.map((item) => describeItemWithAttachments(item)),
+            )
+          : page.map((item) => describeItem(item)),
       };
     },
   },
@@ -651,7 +756,7 @@ export const TOOLS: ToolDef[] = [
     name: "zotero_find_in_library",
     title: "Check whether papers are in Zotero",
     description:
-      "For each id, report the matching Zotero item (by DOI, arXiv id, S2 id or title+year) and its collections and PDF status. Ids that need it are resolved via one S2 batch call.",
+      "For each id (not titles — use s2_match_title first to resolve a title to an id), report the matching Zotero item (by DOI, arXiv id, S2 id or title+year) and its collections and PDF status. Ids that need it are resolved via one S2 batch call.",
     inputSchema: {
       type: "object",
       properties: {
@@ -667,6 +772,7 @@ export const TOOLS: ToolDef[] = [
           default: true,
           description: "Fetch DOI/arXiv/title from S2 to improve matching.",
         },
+        include_attachments: includeAttachments,
         library_id: libraryID,
       },
       required: ["ids"],
@@ -676,18 +782,22 @@ export const TOOLS: ToolDef[] = [
       const lib = resolveLibraryID(args.library_id);
       const parsed = (args.ids as string[]).map(parseIdentifier);
       let papers: Array<S2Paper | null> = parsed.map(() => null);
+      let rejected = new Set<number>();
       let warning: string | undefined;
       if (args.resolve_via_s2) {
         // The library check still works without S2 (e.g. no API key yet)
         try {
-          papers = await ctx.s2.paperBatch(
-            ctx.stats,
-            parsed.map((p) => p.s2Query),
+          ({ papers, rejected } = await batchLookup(
+            ctx,
+            parsed,
             "paperId,corpusId,externalIds,title,year",
-          );
+          ));
         } catch (e) {
           if (!(e instanceof S2Error)) throw e;
-          warning = `Matched by the given ids only; Semantic Scholar lookup failed: ${e.message}`;
+          warning =
+            e.status === 400
+              ? `Matched by the given ids only; Semantic Scholar lookup failed: ${e.message}. zotero_find_in_library takes paper ids, not titles (use s2_match_title first).`
+              : `Matched by the given ids only; Semantic Scholar lookup failed: ${e.message}`;
         }
       }
       const results = [];
@@ -699,7 +809,15 @@ export const TOOLS: ToolDef[] = [
         results.push({
           id: args.ids[i],
           inLibrary: !!item,
-          item: item ? describeItem(item) : null,
+          item: item
+            ? args.include_attachments
+              ? await describeItemWithAttachments(item)
+              : describeItem(item)
+            : null,
+          ...(rejected.has(i) &&
+            !item && {
+              error: `${NOT_AN_S2_ID} (use s2_match_title first for titles)`,
+            }),
         });
       }
       return warning ? { warning, results } : { results };
@@ -708,7 +826,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "zotero_add_papers",
     title: "Add papers to Zotero",
-    description: `Add up to ${MAX_ADD} papers (any id form) to Zotero, optionally into a collection (created if missing), and attach PDFs (S2 open-access → arXiv → Zotero resolvers). Papers already in the library are reused and just added to the collection. For longer lists, call repeatedly in chunks of ${MAX_ADD}.`,
+    description: `Add up to ${MAX_ADD} papers (any id form) to Zotero, optionally into a collection (created if missing), and attach PDFs (S2 open-access → arXiv → Zotero resolvers). Papers already in the library are reused and just added to the collection. A DOI or arXiv id that Semantic Scholar doesn't have is looked up by Zotero itself (Crossref, arXiv). Each id gets its own result row, so one bad id doesn't fail the others. For longer lists, call repeatedly in chunks of ${MAX_ADD}.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -748,10 +866,7 @@ export const TOOLS: ToolDef[] = [
       const lib = resolveLibraryID(args.library_id, true);
       const ids = args.ids as string[];
       const parsed = ids.map(parseIdentifier);
-      const papers = await ctx.s2.paperBatch(
-        ctx.stats,
-        parsed.map((p) => p.s2Query),
-      );
+      const { papers, rejected } = await batchLookup(ctx, parsed);
       const target = args.collection
         ? await resolveCollection(lib, args.collection, args.create_collection)
         : null;
@@ -764,23 +879,42 @@ export const TOOLS: ToolDef[] = [
         existing?: boolean;
         metadataSource?: MetadataSource;
         pdf?: PdfStatus;
+        note?: string;
         error?: string;
       };
       const rows: Row[] = [];
-      const work: Array<{ row: Row; item: Zotero.Item; paper: S2Paper }> = [];
+      const work: Array<{
+        row: Row;
+        item: Zotero.Item;
+        paper: S2Paper | null;
+      }> = [];
 
       for (let i = 0; i < ids.length; i++) {
         const paper = papers[i];
         const row: Row = { id: ids[i] };
         rows.push(row);
-        if (!paper) {
-          row.error = "not found on Semantic Scholar";
+        // Zotero's own lookup can still resolve a DOI or arXiv id S2 lacks
+        const { doi, arxiv } = parsed[i];
+        const byId = !paper && (doi || arxiv) ? { doi, arxiv } : null;
+        if (!paper && !byId) {
+          row.error = rejected.has(i)
+            ? NOT_AN_S2_ID
+            : "not found on Semantic Scholar";
+          continue;
+        }
+        // Translator lookups take ~3 s each; answer before the client gives up
+        if (Date.now() >= ctx.deadline) {
+          row.error = OUT_OF_TIME;
           continue;
         }
         try {
           // A parallel call must not create the same item between our check and create
           const item = await libraryWrites.run(async () => {
-            const found = await findExisting(lib, idsFromPaper(paper));
+            if (Date.now() >= ctx.deadline) throw new ToolError(OUT_OF_TIME);
+            const found = await findExisting(
+              lib,
+              paper ? idsFromPaper(paper) : byId!,
+            );
             let item: Zotero.Item;
             if (found) {
               item = found;
@@ -789,6 +923,26 @@ export const TOOLS: ToolDef[] = [
                 item.addToCollection(collectionID);
                 await item.saveTx();
               }
+            } else if (!paper) {
+              const created = await createFromTranslator(
+                lib,
+                byId!,
+                collectionID,
+              ).catch((e) => {
+                throw new ToolError(
+                  `not found on Semantic Scholar, and Zotero's ${doi ? "DOI" : "arXiv"} lookup failed: ${errorMessage(e)}`,
+                );
+              });
+              if (!created) {
+                throw new ToolError(
+                  `not found on Semantic Scholar or by Zotero's ${doi ? "DOI" : "arXiv"} lookup`,
+                );
+              }
+              item = created;
+              row.existing = false;
+              row.metadataSource = "translator";
+              row.note =
+                "Semantic Scholar doesn't have this paper; the metadata comes from Zotero's own lookup.";
             } else {
               const created = await createItem(
                 lib,
@@ -814,7 +968,7 @@ export const TOOLS: ToolDef[] = [
       if (args.attach_pdf) {
         await Promise.all(
           work.map(async ({ row, item, paper }) => {
-            row.pdf = await attachPDF(item, paper);
+            row.pdf = await attachPDFBy(ctx.deadline, item, paper);
           }),
         );
       }
@@ -831,16 +985,132 @@ export const TOOLS: ToolDef[] = [
           existing: rows.filter((r) => r.existing === true).length,
           failed: rows.filter((r) => r.error).length,
           pdfAttached: rows.filter((r) => r.pdf === "attached").length,
+          pdfPending: rows.filter((r) => r.pdf === "pending").length,
         },
         results: rows,
-        ...(rows.some((r) => r.pdf === "not_found") && { hint: PDF_HINT }),
+        ...pdfHint(rows),
+      };
+    },
+  },
+  {
+    name: "zotero_move_items",
+    title: "Move items between collections",
+    description: `Add up to ${MAX_MOVE} existing items to collections and/or remove them from collections. Give both to move items (e.g. into a subcollection). Items are never deleted: an item removed from its last collection stays in the library, unfiled. Collections themselves are not deleted or renamed; do that in Zotero.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        item_keys: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: MAX_MOVE,
+        },
+        add_to: {
+          type: "array",
+          items: collectionRef,
+          maxItems: 10,
+          description: "Collections to put the items in.",
+        },
+        remove_from: {
+          type: "array",
+          items: collectionRef,
+          maxItems: 10,
+          description:
+            "Collections to take the items out of. They must exist. Subcollections are not affected.",
+        },
+        create_collections: {
+          type: "boolean",
+          default: true,
+          description: "Create add_to collections that don't exist yet.",
+        },
+        library_id: libraryID,
+      },
+      required: ["item_keys"],
+    },
+    annotations: {
+      readOnlyHint: false,
+      // Changes collection membership only; items and collections stay
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async handler(args) {
+      const lib = resolveLibraryID(args.library_id, true);
+      const addRefs = (args.add_to as string[] | undefined) ?? [];
+      const removeRefs = (args.remove_from as string[] | undefined) ?? [];
+      if (!addRefs.length && !removeRefs.length) {
+        throw new ToolError("Give add_to, remove_from, or both");
+      }
+      // Check everything before the first write, so a typo changes nothing
+      const items = (args.item_keys as string[]).map((k) => getItem(lib, k));
+      const dedupeCollections = (list: Zotero.Collection[]) => {
+        const seen = new Set<number>();
+        return list.filter((c) => !seen.has(c.id) && !!seen.add(c.id));
+      };
+      const removeFrom = dedupeCollections(
+        removeRefs.map((ref) => {
+          const collection = findCollection(lib, ref);
+          if (!collection) {
+            throw new ToolError(`Collection "${ref}" (remove_from) not found`);
+          }
+          return collection;
+        }),
+      );
+      for (const ref of addRefs) {
+        const existing = findCollection(lib, ref);
+        if (existing && removeFrom.some((c) => c.id === existing.id)) {
+          throw new ToolError(
+            `Collection "${ref}" is in both add_to and remove_from`,
+          );
+        }
+        if (!existing) {
+          if (!args.create_collections) {
+            throw new ToolError(`Collection "${ref}" (add_to) not found`);
+          }
+          if (!splitCollectionPath(ref).length) {
+            throw new ToolError("Collection path is empty");
+          }
+        }
+      }
+      const resolvedAddTo: Zotero.Collection[] = [];
+      for (const ref of addRefs) {
+        resolvedAddTo.push(
+          (await resolveCollection(lib, ref, args.create_collections))
+            .collection,
+        );
+      }
+      const addTo = dedupeCollections(resolvedAddTo);
+
+      const results = [];
+      for (const item of items) {
+        // Membership is read and written under the lock other writers use
+        results.push(
+          await libraryWrites.run(async () => {
+            const added = addTo.filter((c) => !item.inCollection(c.id));
+            const removed = removeFrom.filter((c) => item.inCollection(c.id));
+            for (const c of added) item.addToCollection(c.id);
+            for (const c of removed) item.removeFromCollection(c.id);
+            if (added.length || removed.length) await item.saveTx();
+            return {
+              itemKey: item.key,
+              added: added.map((c) => c.key),
+              removed: removed.map((c) => c.key),
+              collections: itemCollectionKeys(item),
+            };
+          }),
+        );
+      }
+      return {
+        addTo: addTo.map(describeCollection),
+        removeFrom: removeFrom.map(describeCollection),
+        results,
       };
     },
   },
   {
     name: "zotero_attach_pdf",
     title: "Find and attach PDFs",
-    description: `Find and attach a PDF for up to ${MAX_ADD} existing Zotero items that lack one.`,
+    description: `Find and attach a PDF for up to ${MAX_ADD} existing Zotero items that lack one. A download that outlasts the call is reported as "pending" and keeps running; call again with those keys to see how it ended.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -872,20 +1142,17 @@ export const TOOLS: ToolDef[] = [
       const results = await Promise.all(
         items.map(async (item, i) => ({
           itemKey: item.key,
-          pdf: await attachPDF(item, papers[i]),
+          pdf: await attachPDFBy(ctx.deadline, item, papers[i]),
         })),
       );
-      return {
-        results,
-        ...(results.some((r) => r.pdf === "not_found") && { hint: PDF_HINT }),
-      };
+      return { results, ...pdfHint(results) };
     },
   },
   {
     name: "zotero_add_pdf_from_url",
     title: "Add a PDF from a URL",
     description:
-      "Download a PDF into Zotero. Works with direct PDF links and with article landing pages (Zotero follows the page to its PDF). With parent_item_key it is attached to that item; otherwise it is saved standalone (optionally into a collection) and Zotero's metadata recognizer creates a parent item. If the site blocks the download, fetch the file yourself and use zotero_add_pdf_file.",
+      "Download a PDF into Zotero. Works with direct PDF links and with article landing pages (Zotero follows the page to its PDF). With parent_item_key it is attached to that item; otherwise it is saved standalone (optionally into a collection) and Zotero's metadata recognizer creates a parent item. Many publisher sites refuse automated downloads; the error then says what the site answered. If so, or if the PDF is already on disk, fetch the file yourself and use zotero_add_pdf_file.",
     inputSchema: {
       type: "object",
       properties: {
@@ -905,8 +1172,6 @@ export const TOOLS: ToolDef[] = [
     },
     async handler(args) {
       const lib = resolveLibraryID(args.library_id, true);
-      if (!/^https?:\/\//i.test(args.url))
-        throw new ToolError("url must be http(s)");
       return importPDFFromURL(args.url, await pdfTarget(lib, args));
     },
   },
@@ -971,7 +1236,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "zotero_enrich_items",
     title: "Enrich items from Semantic Scholar",
-    description: `Match up to ${MAX_ADD} existing Zotero items on Semantic Scholar (by S2 id, DOI, arXiv, else an exact title with no conflicting year) and fill in missing fields (abstract, date, venue, DOI, authors). Records the S2 id in Extra. With overwrite=true existing values are replaced.`,
+    description: `Match up to ${MAX_ADD} existing Zotero items on Semantic Scholar (by S2 id, DOI, arXiv, else an exact title with no conflicting year) and fill in missing fields (abstract, date, venue, DOI, authors). Records the S2 id in Extra. With overwrite=true existing values are replaced. With fix_item_type=true an item whose type is wrong (e.g. a conference paper saved as a journal article) is changed to the right one.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -983,13 +1248,19 @@ export const TOOLS: ToolDef[] = [
           maxItems: MAX_ADD,
         },
         overwrite: { type: "boolean", default: false },
+        fix_item_type: {
+          type: "boolean",
+          default: false,
+          description:
+            "Change the item type when Semantic Scholar's data clearly shows another one (journal article ↔ conference paper, preprint, book…). Zotero drops fields the new type doesn't have. The change is reported as itemType: { from, to }.",
+        },
         library_id: libraryID,
       },
       required: ["item_keys"],
     },
     annotations: {
       readOnlyHint: false,
-      // overwrite=true replaces existing field values
+      // overwrite=true replaces existing field values; fix_item_type can drop some
       destructiveHint: true,
       idempotentHint: true,
       openWorldHint: true,
@@ -1006,13 +1277,16 @@ export const TOOLS: ToolDef[] = [
           results.push({ itemKey: item.key, matched: false });
           continue;
         }
+        // Before the fields: they are checked against the item's type
+        const retyped = args.fix_item_type ? fixItemType(item, paper) : null;
         const changed = applyMapped(item, s2ToZotero(paper), !args.overwrite);
-        if (changed.length) await item.saveTx();
+        if (changed.length || retyped) await item.saveTx();
         results.push({
           itemKey: item.key,
           matched: true,
           paperId: paper.paperId,
           changed,
+          ...(retyped && { itemType: retyped }),
         });
       }
       return { results };

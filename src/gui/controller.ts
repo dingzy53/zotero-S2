@@ -81,6 +81,7 @@ export class SearchController implements ViewHost, AddHost {
   readonly addBar: AddBar;
   private badges = new LibraryBadges(() => this.refreshMarks());
   private outcomes = new Map<string, string>();
+  private lastError: string | null = null;
 
   constructor(readonly win: Window) {
     this.doc = win.document;
@@ -262,6 +263,17 @@ export class SearchController implements ViewHost, AddHost {
     this.$("open-settings").addEventListener("click", () =>
       Zotero.Utilities.Internal.openPreferences(getPrefsPaneID() ?? ""),
     );
+    this.win.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "w"
+      ) {
+        e.preventDefault();
+        this.win.close();
+      }
+    });
   }
 
   private buildFilterGrids() {
@@ -367,6 +379,7 @@ export class SearchController implements ViewHost, AddHost {
     this.showHint(null);
     if (plan.kind === "error") {
       this.showError(getString(`gui-error-${plan.error}` as FluentMessageId));
+      this.renderStatus();
       return;
     }
     const label = form.query.trim();
@@ -704,7 +717,7 @@ export class SearchController implements ViewHost, AddHost {
       results.replaceChildren(
         el(this.doc, "div", {
           class: "s2-empty",
-          text: getString("gui-status-ready"),
+          text: this.lastError ?? getString("gui-status-ready"),
         }),
       );
     } else if (!current.papers.length) {
@@ -845,7 +858,11 @@ export class SearchController implements ViewHost, AddHost {
     next.disabled = more.disabled = this.busy || !canNext(paging);
     if (this.busy) return;
     if (!current) {
-      this.setStatus(getString("gui-status-ready"));
+      this.setStatus(
+        this.lastError
+          ? getString("gui-status-error")
+          : getString("gui-status-ready"),
+      );
       return;
     }
     const count = current.authors?.length ?? current.papers.length;
@@ -886,10 +903,19 @@ export class SearchController implements ViewHost, AddHost {
   }
 
   showError(message: string | null) {
+    this.lastError = message;
     const banner = this.$("banner");
     banner.hidden = !message;
     this.$("banner-text").textContent = message ?? "";
     this.$("open-settings").hidden = !message || !/API key/i.test(message);
+    if (!this.current) {
+      this.$("results").replaceChildren(
+        el(this.doc, "div", {
+          class: "s2-empty",
+          text: message ?? getString("gui-status-ready"),
+        }),
+      );
+    }
   }
 
   showHint(message: string | null) {

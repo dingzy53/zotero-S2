@@ -131,6 +131,33 @@ export function hasPDF(item: Zotero.Item): boolean {
     .some((id) => (Zotero.Items.get(id) as Zotero.Item).isPDFAttachment());
 }
 
+/** A child attachment, with where its file is on this computer. */
+export async function describeAttachment(att: Zotero.Item) {
+  // false for a web link, or a file that isn't on disk
+  const path = att.isFileAttachment() ? await att.getFilePathAsync() : false;
+  return {
+    key: att.key,
+    title: att.getField("title") as string,
+    filename: att.attachmentFilename || null,
+    contentType: att.attachmentContentType || null,
+    path: path || null,
+  };
+}
+
+export async function itemAttachments(item: Zotero.Item) {
+  const atts = (
+    Zotero.Items.get(item.getAttachments()) as Zotero.Item[]
+  ).filter((att) => !att.deleted);
+  return Promise.all(atts.map(describeAttachment));
+}
+
+export function itemCollectionKeys(item: Zotero.Item): string[] {
+  return item.getCollections().map((id) => {
+    const c = Zotero.Collections.get(id) as Zotero.Collection | false;
+    return c ? c.key : String(id);
+  });
+}
+
 export function describeItem(item: Zotero.Item) {
   const creators = item.getCreators();
   return {
@@ -146,9 +173,18 @@ export function describeItem(item: Zotero.Item) {
     arxiv: itemArxiv(item),
     s2PaperId: itemS2Id(item),
     hasPDF: hasPDF(item),
-    collections: item.getCollections().map((id) => {
-      const c = Zotero.Collections.get(id) as Zotero.Collection | false;
-      return c ? c.key : String(id);
-    }),
+    collections: itemCollectionKeys(item),
+  };
+}
+
+/**
+ * Adds child attachments and their file paths, so an agent can read a PDF
+ * without going around the plugin (Zotero's local API, or a copy of
+ * zotero.sqlite).
+ */
+export async function describeItemWithAttachments(item: Zotero.Item) {
+  return {
+    ...describeItem(item),
+    attachments: await itemAttachments(item),
   };
 }

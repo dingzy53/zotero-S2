@@ -31,7 +31,7 @@ export function response(
 
 /**
  * S2 client backed by the fixtures: `/paper/batch` resolves DOI:, ARXIV:,
- * CorpusId: and paperId. Searches, author papers, citations, references and
+ * CorpusId: and paperId, and answers 400 if any id is a `URL:`. Searches, author papers, citations, references and
  * recommendations all return the fixture list (bulk search in two token
  * pages); anything else is a 404.
  */
@@ -55,6 +55,10 @@ export function fixtureClient(
     calls.push(`${method} ${url}`);
     if (url.includes("/paper/batch")) {
       const ids: string[] = JSON.parse(body!).ids;
+      // S2 fails the whole batch over one id it can't read
+      if (ids.some((id) => /^URL:/i.test(id))) {
+        return response(400, { error: "No valid paper ids given" });
+      }
       return response(200, ids.map(find));
     }
     if (url.includes("/paper/search/match")) {
@@ -84,6 +88,7 @@ export function fixtureClient(
           });
     }
     if (url.includes("/paper/search")) return response(200, paged(papers));
+    if (url.includes("/snippet/search")) return response(200, { data: [] });
     if (url.includes("/author/search")) {
       return response(
         200,

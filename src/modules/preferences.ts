@@ -12,6 +12,7 @@ import { newStats } from "../s2/types";
 import { errorMessage } from "../mcp/errors";
 import { openSearchWindow } from "../gui/searchWindow";
 import { clearHistory } from "../gui/state";
+import { bridgeCommand } from "./bridge";
 
 let paneID: string | undefined;
 
@@ -39,10 +40,13 @@ export function onPrefsLoad(win: Window) {
   const command = () =>
     `claude mcp add --transport http zotero-s2 ${endpoint()} --header "Authorization: Bearer ${getPref("mcpToken")}"`;
 
+  const stdioCommand = () => bridgeCommand(getPref("mcpToken"), endpoint());
+
   const renderAccess = () => {
     $("endpoint")!.value = endpoint();
     $("token")!.value = getPref("mcpToken");
     $("command")!.value = command();
+    $("command-stdio")!.value = stdioCommand();
   };
   renderAccess();
 
@@ -66,6 +70,9 @@ export function onPrefsLoad(win: Window) {
   $("copy-command")?.addEventListener("command", (e: Event) =>
     copy(command(), e.target as Element),
   );
+  $("copy-command-stdio")?.addEventListener("command", (e: Event) =>
+    copy(stdioCommand(), e.target as Element),
+  );
   $("regenerate")?.addEventListener("command", () => {
     setPref("mcpToken", generateToken());
     renderAccess();
@@ -87,6 +94,15 @@ export function onPrefsLoad(win: Window) {
 
   $("test")?.addEventListener("command", async () => {
     const out = $<HTMLElement>("test-result")!;
+    const key = (
+      $<HTMLInputElement>("apikey")?.value ||
+      getPref("apiKey") ||
+      ""
+    ).trim();
+    if (!key) {
+      out.textContent = getString("test-no-key");
+      return;
+    }
     out.textContent = getString("test-running");
     const stats = newStats();
     const start = Date.now();

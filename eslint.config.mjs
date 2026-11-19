@@ -11,5 +11,22 @@ export default zotero({
         "mocha/max-top-level-suites": "off",
       },
     },
+    {
+      // The stdio bridge and its tests run in Node, not in Zotero
+      files: ["addon/content/bridge/*.mjs", "bridge/*.mjs"],
+      languageOptions: {
+        globals: {
+          AbortSignal: "readonly",
+          Buffer: "readonly",
+          URL: "readonly",
+          clearInterval: "readonly",
+          clearTimeout: "readonly",
+          fetch: "readonly",
+          process: "readonly",
+          setInterval: "readonly",
+          setTimeout: "readonly",
+        },
+      },
+    },
   ],
 });

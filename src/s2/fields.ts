@@ -72,6 +72,18 @@ export function compactPaper(p: S2Paper | null) {
 }
 
 /**
+ * A raw S2 paper (the caller chose `fields`) without the ~300-character
+ * Unpaywall disclaimer S2 repeats in every `openAccessPdf`. The object keeps
+ * its `{ url, status }` shape, which the search window reads.
+ */
+export function trimRawPaper<T extends S2Paper | null | undefined>(p: T): T {
+  const oa = p?.openAccessPdf as Record<string, unknown> | null | undefined;
+  if (!p || !oa || typeof oa !== "object" || !("disclaimer" in oa)) return p;
+  const { disclaimer: _dropped, ...rest } = oa;
+  return { ...p, openAccessPdf: rest };
+}
+
+/**
  * One `/snippet/search` row. Its paper block always carries an open-access
  * disclaimer, so keep only what's needed to cite or add the paper.
  */

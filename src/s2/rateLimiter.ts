@@ -18,20 +18,38 @@ export class RateLimiter {
     private readonly sleep: Sleep = defaultSleep,
   ) {}
 
-  schedule<T>(task: () => Promise<T>): Promise<T> {
+  schedule<T>(task: () => Promise<T>): Promise<T>;
+  schedule<T>(
+    task: () => Promise<T>,
+    latestStart: number | undefined,
+  ): Promise<T | undefined>;
+  schedule<T>(
+    task: () => Promise<T>,
+    latestStart?: number,
+  ): Promise<T | undefined> {
     const slot = this.tail.then(async () => {
       // Loop: a pause() may arrive while we're already waiting for our slot
       for (;;) {
-        const wait =
-          Math.max(this.lastStart + this.intervalMs, this.notBefore) -
-          this.now();
+        const now = this.now();
+        const ready = Math.max(
+          this.lastStart + this.intervalMs,
+          this.notBefore,
+        );
+        if (latestStart !== undefined && Math.max(now, ready) > latestStart) {
+          return false;
+        }
+        const wait = ready - now;
         if (wait <= 0) break;
         await this.sleep(wait);
       }
       this.lastStart = this.now();
+      return true;
     });
-    this.tail = slot.catch(() => {});
-    return slot.then(task);
+    this.tail = slot.then(
+      () => {},
+      () => {},
+    );
+    return slot.then((ok) => (ok ? task() : undefined));
   }
 
   /** Holds every queued task for `ms` from now, e.g. after a 429. */

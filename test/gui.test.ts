@@ -602,4 +602,59 @@ describe("search window: memory and export", function () {
     const ris = await ctl.exportText("ris");
     assert.equal(ris.count, 2);
   });
+
+  it("shows search error in the empty results pane instead of a stale placeholder", async function () {
+    const failing = FIXTURES.map((p) => ({ ...p }));
+    const { doc, ctl } = await openWindow([], failing);
+    api().guiDeps.s2 = () => ({
+      searchPapers: async () => {
+        throw new Error("No Semantic Scholar API key set.");
+      },
+    });
+    setQuery(doc, "battery");
+    await ctl.search();
+    assert.isFalse(doc.getElementById("s2-banner")!.hidden);
+    const emptyText = doc.querySelector("#s2-results .s2-empty")?.textContent;
+    assert.include(emptyText ?? "", "No Semantic Scholar API key set.");
+    assert.notInclude(emptyText ?? "", "Enter a query");
+    assert.equal(
+      doc.getElementById("s2-status")!.textContent,
+      "Search failed.",
+    );
+  });
+
+  it("renders an Abstract heading and strips redundant Abstract prefix", async function () {
+    const withPrefix = [
+      { ...FIXTURES[0], abstract: "Abstract Range anxiety affects adoption." },
+      ...FIXTURES.slice(1),
+    ];
+    const { doc, ctl } = await openWindow([], withPrefix);
+    Zotero.Prefs.set(`${config.prefsPrefix}.resultsView`, "table", true);
+    setQuery(doc, "attention");
+    await ctl.search();
+    rows(doc)[0].dispatchEvent(
+      new (doc.defaultView as any).MouseEvent("mousedown", { bubbles: true }),
+    );
+    const detail = doc.getElementById("s2-detail")!;
+    assert.equal(
+      detail.querySelector(".s2-detail-heading")?.textContent,
+      "Abstract",
+    );
+    assert.equal(
+      detail.querySelector(".s2-abstract")?.textContent,
+      "Range anxiety affects adoption.",
+    );
+  });
+
+  it("closes the search window on Ctrl+W", async function () {
+    const { win } = await openWindow();
+    win.dispatchEvent(
+      new (win as any).KeyboardEvent("keydown", {
+        key: "w",
+        ctrlKey: true,
+        bubbles: true,
+      }),
+    );
+    await waitFor(() => api().searchWindows().length === 0, "closed on Ctrl+W");
+  });
 });

@@ -59,14 +59,29 @@ async function createFromS2(
   return item;
 }
 
-async function createFromTranslator(
+/** What Zotero's own lookup (Crossref, arXiv) can resolve. */
+export interface TranslatorIds {
+  doi?: string;
+  arxiv?: string;
+}
+
+/**
+ * Creates an item through Zotero's DOI/arXiv lookup, or returns `null` when
+ * no translator knows the id. `extra` lines (our S2 provenance) are merged
+ * into the item's Extra. It needs no S2 record, so it also serves papers that
+ * Semantic Scholar doesn't have.
+ */
+export async function createFromTranslator(
   libraryID: number,
-  paper: S2Paper,
+  ids: TranslatorIds,
   collectionID: number | null,
+  extra: string[] = [],
 ): Promise<Zotero.Item | null> {
-  const doi = paper.externalIds?.DOI;
-  const arxiv = paper.externalIds?.ArXiv;
-  const identifier = doi ? { DOI: doi } : arxiv ? { arXiv: arxiv } : null;
+  const identifier = ids.doi
+    ? { DOI: ids.doi }
+    : ids.arxiv
+      ? { arXiv: ids.arxiv }
+      : null;
   if (!identifier) return null;
 
   return translatorLimiter.schedule(async () => {
@@ -87,9 +102,9 @@ async function createFromTranslator(
     // would make createItem() fall back to S2 and create a second copy
     try {
       // Tag our provenance so later dedupe is exact
-      const extra = item.getField("extra") as string;
-      const merged = mergeExtra(extra, s2ToZotero(paper).extra);
-      if (merged !== extra) {
+      const current = item.getField("extra") as string;
+      const merged = mergeExtra(current, extra);
+      if (merged !== current) {
         item.setField("extra", merged);
         await item.saveTx();
       }
@@ -108,7 +123,12 @@ export async function createItem(
 ): Promise<{ item: Zotero.Item; source: MetadataSource }> {
   if (source === "translator") {
     try {
-      const item = await createFromTranslator(libraryID, paper, collectionID);
+      const item = await createFromTranslator(
+        libraryID,
+        { doi: paper.externalIds?.DOI, arxiv: paper.externalIds?.ArXiv },
+        collectionID,
+        s2ToZotero(paper).extra,
+      );
       if (item) return { item, source: "translator" };
     } catch (e) {
       Zotero.debug(

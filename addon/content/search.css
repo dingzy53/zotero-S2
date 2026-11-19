@@ -298,9 +298,18 @@
   font-size: 12px;
 }
 
+.s2-detail-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fill-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin: 10px 0 4px;
+}
+
 .s2-abstract {
   line-height: 1.45;
-  margin: 8px 0;
+  margin: 4px 0 8px;
 }
 
 .s2-actions {

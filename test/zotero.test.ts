@@ -1,13 +1,13 @@
 import { assert } from "chai";
-import { TOOLS_BY_NAME } from "../src/mcp/tools";
+import { TOOLS_BY_NAME, ToolContext } from "../src/mcp/tools";
 import { ToolError } from "../src/mcp/errors";
 import { prepareArgs } from "../src/mcp/schema";
 import { S2Client } from "../src/s2/client";
 import { RateLimiter } from "../src/s2/rateLimiter";
-import { newStats } from "../src/s2/types";
+import { S2Paper, newStats } from "../src/s2/types";
 import { resolveCollection } from "../src/zotero/collections";
 import { createItem } from "../src/zotero/importer";
-import { MAX_PDF_BYTES, writeTempPDF } from "../src/zotero/pdf";
+import { MAX_PDF_BYTES, pdfDeps, writeTempPDF } from "../src/zotero/pdf";
 import { getEntries } from "../src/log/activity";
 import { runTool as runToolLogged } from "../src/mcp/runTool";
 import { ATTENTION, DEEP_LEARNING, ARXIV_ONLY } from "./fixtures";
@@ -15,17 +15,62 @@ import { fixtureClient, response } from "./helpers";
 
 const ROOT = `S2 Test ${Date.now()}`;
 
+/** A tool context like runTool's, with `ms` left before the deadline. */
+function context(s2: S2Client, ms = 50_000): ToolContext {
+  const deadline = Date.now() + ms;
+  return { s2, stats: newStats(deadline), deadline };
+}
+
 async function runTool(
   name: string,
   args: Record<string, unknown>,
   calls: string[] = [],
+  budgetMs?: number,
 ) {
   const tool = TOOLS_BY_NAME.get(name)!;
   const s2 = fixtureClient(undefined, calls);
-  return (await tool.handler(prepareArgs(tool.inputSchema, args), {
-    s2,
-    stats: newStats(),
-  })) as any;
+  return (await tool.handler(
+    prepareArgs(tool.inputSchema, args),
+    context(s2, budgetMs),
+  )) as any;
+}
+
+/**
+ * Offline stand-in for Zotero's DOI/arXiv lookup. `lookup` gets the
+ * identifier and returns a title, or `null` for "no translator knows it".
+ */
+async function withTranslator<T>(
+  lookup: (identifier: { DOI?: string; arXiv?: string }) => string | null,
+  run: () => Promise<T>,
+): Promise<T> {
+  const translate = Zotero.Translate as any;
+  const original = translate.Search;
+  translate.Search = class {
+    private title: string | null = null;
+    private doi?: string;
+    setIdentifier(identifier: { DOI?: string; arXiv?: string }) {
+      this.title = lookup(identifier);
+      this.doi = identifier.DOI;
+    }
+    async getTranslators() {
+      return this.title === null ? [] : [{}];
+    }
+    setTranslator() {}
+    async translate(opts: { libraryID: number; collections: number[] }) {
+      const item = new Zotero.Item("journalArticle");
+      item.libraryID = opts.libraryID;
+      item.setField("title", this.title!);
+      if (this.doi) item.setField("DOI", this.doi);
+      if (opts.collections) item.setCollections(opts.collections);
+      await item.saveTx();
+      return [item];
+    }
+  };
+  try {
+    return await run();
+  } finally {
+    translate.Search = original;
+  }
 }
 
 describe("collections", function () {
@@ -69,6 +114,121 @@ describe("collections", function () {
   });
 });
 
+describe("zotero_move_items", function () {
+  const lib = () => Zotero.Libraries.userLibraryID;
+  const keysOf = (item: Zotero.Item) =>
+    item
+      .getCollections()
+      .map((id) => (Zotero.Collections.get(id) as Zotero.Collection).key);
+
+  it("moves items into a subcollection without deleting anything", async function () {
+    const from = (await resolveCollection(lib(), `${ROOT}/Move`, true))
+      .collection;
+    const items: Zotero.Item[] = [];
+    for (const title of ["Move test A", "Move test B"]) {
+      const item = new Zotero.Item("journalArticle");
+      item.setField("title", title);
+      item.setCollections([from.id]);
+      await item.saveTx();
+      items.push(item);
+    }
+    const args = {
+      item_keys: items.map((i) => i.key),
+      add_to: [`${ROOT}/Move/Sub`],
+      remove_from: [`${ROOT}/Move`],
+    };
+    try {
+      const res = await runTool("zotero_move_items", args);
+      const sub = res.addTo[0];
+      assert.equal(sub.path, `${ROOT}/Move/Sub`);
+      assert.equal(sub.itemCount, 2);
+      assert.equal(res.removeFrom[0].itemCount, 0);
+      for (const [i, row] of res.results.entries()) {
+        assert.deepEqual(row.added, [sub.key]);
+        assert.deepEqual(row.removed, [from.key]);
+        assert.deepEqual(row.collections, [sub.key]);
+        assert.deepEqual(keysOf(items[i]), [sub.key]);
+        assert.isFalse(items[i].deleted);
+      }
+      // Idempotent: nothing left to do
+      const again = await runTool("zotero_move_items", args);
+      for (const row of again.results) {
+        assert.deepEqual(row.added, []);
+        assert.deepEqual(row.removed, []);
+      }
+      // Duplicate collection refs deduplicate to a single entry
+      const dupes = await runTool("zotero_move_items", {
+        item_keys: [items[1].key],
+        add_to: [from.key, `${ROOT}/Move`],
+        remove_from: [sub.key, `${ROOT}/Move/Sub`],
+      });
+      assert.deepEqual(dupes.results[0].added, [from.key]);
+      assert.deepEqual(dupes.results[0].removed, [sub.key]);
+      assert.deepEqual(dupes.results[0].collections, [from.key]);
+      // Out of its last collection, an item stays in the library
+      await runTool("zotero_move_items", {
+        item_keys: [items[0].key],
+        remove_from: [sub.key],
+      });
+      assert.deepEqual(keysOf(items[0]), []);
+      assert.isFalse(items[0].deleted);
+      assert.ok(Zotero.Items.getByLibraryAndKey(lib(), items[0].key));
+    } finally {
+      await Zotero.Items.erase(items.map((i) => i.id));
+    }
+  });
+
+  it("changes nothing when an argument is wrong", async function () {
+    const home = (await resolveCollection(lib(), `${ROOT}/Move`, true))
+      .collection;
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", "Move test C");
+    item.setCollections([home.id]);
+    await item.saveTx();
+    const fails = async (args: Record<string, unknown>, message: RegExp) => {
+      const err = await runTool("zotero_move_items", {
+        item_keys: [item.key],
+        ...args,
+      }).catch((e) => e);
+      assert.instanceOf(err, ToolError);
+      assert.match(err.message, message);
+    };
+    try {
+      await fails({}, /add_to, remove_from, or both/);
+      await fails(
+        { add_to: [`${ROOT}/Move/New`], remove_from: [`${ROOT}/No such`] },
+        /remove_from\) not found/,
+      );
+      await fails(
+        { add_to: [`${ROOT}/Move`], remove_from: [home.key] },
+        /both add_to and remove_from/,
+      );
+      await fails(
+        { add_to: [`${ROOT}/Move/New`], create_collections: false },
+        /add_to\) not found/,
+      );
+      await fails(
+        { add_to: [`${ROOT}/Move/ShouldNotCreate`, "/"] },
+        /Collection path is empty/,
+      );
+      await fails({ item_keys: ["NOSUCH22"], add_to: [home.key] }, /not found/);
+      assert.deepEqual(keysOf(item), [home.key]);
+      const cols = (await runTool("zotero_list_collections", {})).collections;
+      assert.isNull(
+        cols.find((c: any) => c.path === `${ROOT}/Move/New`) ?? null,
+        "no collection was created by a failed call",
+      );
+      assert.isNull(
+        cols.find((c: any) => c.path === `${ROOT}/Move/ShouldNotCreate`) ??
+          null,
+        "no partial add_to collection was created before an empty path failed",
+      );
+    } finally {
+      await item.eraseTx();
+    }
+  });
+});
+
 describe("zotero_add_papers", function () {
   this.timeout(30_000);
 
@@ -80,7 +240,8 @@ describe("zotero_add_papers", function () {
         ids: [
           "ARXIV:1706.03762",
           "DOI:10.1038/nature14539",
-          "DOI:10.9999/missing",
+          // Not a DOI or arXiv id, so Zotero's own lookup isn't tried
+          "CorpusId:1",
         ],
         collection: `${ROOT}/Add`,
         attach_pdf: false,
@@ -158,11 +319,112 @@ describe("zotero_add_papers", function () {
           ids: ["ARXIV:2401.99999"],
           attach_pdf: false,
         }),
-        { s2: fixtureClient([paper]), stats: newStats() },
+        context(fixtureClient([paper])),
       ) as Promise<any>;
     const [a, b] = await Promise.all([add(), add()]);
     assert.equal(a.results[0].itemKey, b.results[0].itemKey);
     assert.equal(a.summary.added + b.summary.added, 1);
+  });
+
+  it("fails only the id S2 can't read, not the whole call", async function () {
+    const calls: string[] = [];
+    const res = await runTool(
+      "zotero_add_papers",
+      {
+        ids: [
+          "URL:https://example.org/some/article",
+          "DOI:10.1038/nature14539",
+          // Unwrapped by the parser, so it never reaches S2 as a URL
+          "URL:https://arxiv.org/abs/1706.03762",
+        ],
+        attach_pdf: false,
+      },
+      calls,
+    );
+    assert.match(
+      res.results[0].error,
+      /not a paper id Semantic Scholar accepts/,
+    );
+    assert.isTrue(res.results[1].existing);
+    assert.isTrue(res.results[2].existing);
+    assert.deepInclude(res.summary, { existing: 2, failed: 1 });
+    assert.lengthOf(calls, 2, "the batch, then once more without the bad id");
+  });
+
+  it("looks a DOI up in Zotero when S2 doesn't have the paper", async function () {
+    const doi = "10.1016/j.tra.2023.103774";
+    const title = `Not on S2 ${Date.now()}`;
+    const asked: unknown[] = [];
+    const args = {
+      // The form an agent sent; S2 would answer 400 to it as a URL
+      ids: [`URL:https://doi.org/${doi}`],
+      collection: `${ROOT}/Add`,
+      attach_pdf: false,
+      tags: ["agent"],
+    };
+    const add = () =>
+      withTranslator(
+        (identifier) => {
+          asked.push(identifier);
+          return title;
+        },
+        () => runTool("zotero_add_papers", args),
+      );
+    const first = await add();
+    const row = first.results[0];
+    assert.isUndefined(row.error);
+    assert.isFalse(row.existing);
+    assert.equal(row.metadataSource, "translator");
+    assert.match(row.note, /Semantic Scholar doesn't have this paper/);
+    assert.equal(row.title, title);
+    assert.deepEqual(asked, [{ DOI: doi }]);
+    const item = Zotero.Items.getByLibraryAndKey(
+      Zotero.Libraries.userLibraryID,
+      row.itemKey,
+    ) as Zotero.Item;
+    try {
+      assert.lengthOf(item.getCollections(), 1);
+      assert.isTrue(item.hasTag("agent"));
+      // Idempotent: the second call finds the item by its DOI
+      const second = await add();
+      assert.isTrue(second.results[0].existing);
+      assert.equal(second.results[0].itemKey, row.itemKey);
+      assert.lengthOf(asked, 1, "no second lookup");
+    } finally {
+      await item.eraseTx();
+    }
+  });
+
+  it("reports an id that neither S2 nor Zotero can resolve", async function () {
+    const res = await withTranslator(
+      () => null,
+      () =>
+        runTool("zotero_add_papers", {
+          ids: ["10.9999/missing", "ARXIV:2399.00001"],
+          attach_pdf: false,
+        }),
+    );
+    assert.match(res.results[0].error, /or by Zotero's DOI lookup/);
+    assert.match(res.results[1].error, /or by Zotero's arXiv lookup/);
+    assert.deepInclude(res.summary, { added: 0, failed: 2 });
+  });
+
+  it("leaves the rest for another call once its time is used up", async function () {
+    const tool = TOOLS_BY_NAME.get("zotero_add_papers")!;
+    // The S2 lookup answers, then the deadline passes before the library work
+    const res = (await tool.handler(
+      prepareArgs(tool.inputSchema, {
+        ids: ["DOI:10.1038/nature14539", "ARXIV:1706.03762"],
+      }),
+      { s2: fixtureClient(), stats: newStats(), deadline: Date.now() - 1 },
+    )) as any;
+    // Both are already in the library; neither is touched after the deadline
+    assert.deepEqual(
+      res.results.map((r: any) => r.itemKey),
+      [undefined, undefined],
+    );
+    for (const row of res.results) assert.match(row.error, /ran out of time/);
+    assert.equal(res.summary.failed, 2);
   });
 
   it("rejects more than 25 ids", async function () {
@@ -250,6 +512,40 @@ describe("zotero_attach_pdf", function () {
     }
   });
 
+  it("reports a slow download as pending and doesn't start it twice", async function () {
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", "PDF pending test");
+    await item.saveTx();
+    const api = Zotero.Attachments as any;
+    const original = {
+      add: api.addFileFromURLs,
+      resolvers: api.getFileResolvers,
+    };
+    let downloads = 0;
+    api.getFileResolvers = () => [];
+    api.addFileFromURLs = async () => {
+      downloads++;
+      await Zotero.Promise.delay(400);
+      return {};
+    };
+    try {
+      const args = { item_keys: [item.key] };
+      // The call's time runs out while the download is still going
+      const first = await runTool("zotero_attach_pdf", args, [], 50);
+      assert.equal(first.results[0].pdf, "pending");
+      assert.match(first.hint, /zotero_attach_pdf again/);
+      // Asking again joins the same download
+      const second = await runTool("zotero_attach_pdf", args);
+      assert.equal(second.results[0].pdf, "attached");
+      assert.equal(downloads, 1);
+      assert.isUndefined(second.hint);
+    } finally {
+      api.addFileFromURLs = original.add;
+      api.getFileResolvers = original.resolvers;
+      await item.eraseTx();
+    }
+  });
+
   it("points to the PDF tools when nothing is found", async function () {
     const item = new Zotero.Item("journalArticle");
     item.setField("title", "PDF hint test");
@@ -307,22 +603,75 @@ describe("zotero_find_in_library", function () {
     const s2 = new S2Client({ apiKey: () => "" });
     const res = (await tool.handler(
       prepareArgs(tool.inputSchema, { ids: ["DOI:10.1038/nature14539"] }),
-      { s2, stats: newStats() },
+      context(s2),
     )) as any;
     assert.match(res.warning, /No Semantic Scholar API key/);
     assert.isTrue(res.results[0].inLibrary);
   });
+
+  it("tells agents to use s2_match_title when given a title instead of an id", async function () {
+    const tool = TOOLS_BY_NAME.get("zotero_find_in_library")!;
+    const s2 = new S2Client({
+      apiKey: () => "k",
+      limiter: new RateLimiter(0),
+      transport: async (_m, _u, _h, body) => {
+        const { ids } = JSON.parse(body!);
+        if (ids.some((id: string) => id.includes(" "))) {
+          return response(400, { error: "No valid paper ids given" });
+        }
+        return response(200, [DEEP_LEARNING]);
+      },
+    });
+    const mixed = (await tool.handler(
+      prepareArgs(tool.inputSchema, {
+        ids: ["Attention Is All You Need", "DOI:10.1038/nature14539"],
+      }),
+      context(s2),
+    )) as any;
+    assert.isFalse(mixed.results[0].inLibrary);
+    assert.match(mixed.results[0].error, /s2_match_title/);
+    assert.isTrue(mixed.results[1].inLibrary);
+  });
+});
+
+describe("s2_get_papers", function () {
+  it("marks an id S2 can't read and still returns the others", async function () {
+    const res = await runTool("s2_get_papers", {
+      ids: ["URL:https://example.org/x", "DOI:10.1038/nature14539"],
+    });
+    assert.isFalse(res.papers[0].found);
+    assert.match(res.papers[0].error, /not a paper id/);
+    assert.isTrue(res.papers[1].found);
+    assert.isUndefined(res.papers[1].error);
+  });
+
+  it("still fails when S2 rejects ids of a form it knows", async function () {
+    const tool = TOOLS_BY_NAME.get("s2_get_papers")!;
+    const s2 = new S2Client({
+      apiKey: () => "k",
+      limiter: new RateLimiter(0),
+      transport: async () => response(400, { error: "bad request" }),
+    });
+    const err = await tool
+      .handler(
+        prepareArgs(tool.inputSchema, { ids: ["1706.03762"] }),
+        context(s2),
+      )
+      .catch((e) => e);
+    assert.match(err.message, /bad request/);
+  });
 });
 
 describe("s2_match_title", function () {
-  it("returns the best match, or a ToolError when there is none", async function () {
+  it("returns the best match, or match: null when there is none", async function () {
     const res = await runTool("s2_match_title", { title: DEEP_LEARNING.title });
     assert.equal(res.paper.paperId, DEEP_LEARNING.paperId);
     assert.equal(res.matchScore, 99);
-    const err = await runTool("s2_match_title", {
-      title: "No such paper",
-    }).catch((e) => e);
-    assert.instanceOf(err, ToolError);
+    // A miss is an answer, not an error
+    assert.deepEqual(
+      await runTool("s2_match_title", { title: "No such paper" }),
+      { match: null },
+    );
   });
 });
 
@@ -343,6 +692,73 @@ describe("zotero_enrich_items", function () {
       item.getField("extra") as string,
       `S2 Paper ID: ${DEEP_LEARNING.paperId}`,
     );
+  });
+
+  it("fixes a wrong item type only when asked, and only on evidence", async function () {
+    const ieee: S2Paper = {
+      paperId: "f".repeat(40),
+      corpusId: 999999002,
+      externalIds: { DOI: "10.1109/ICPSAsia55496.2022.9949832" },
+      title: "A Conference Paper Saved as a Journal Article",
+      venue: "IEEE/IAS Industrial and Commercial Power System Asia",
+      year: 2022,
+      authors: [{ authorId: "1", name: "Ada Lovelace" }],
+      publicationTypes: null,
+    };
+    // S2 knows nothing about this one's type: journalArticle is a guess
+    const vague: S2Paper = {
+      paperId: "e".repeat(40),
+      externalIds: { DOI: "10.9999/vague" },
+      title: "A Book Chapter S2 Knows Little About",
+    };
+    const enrich = (item: Zotero.Item, fix: boolean) => {
+      const tool = TOOLS_BY_NAME.get("zotero_enrich_items")!;
+      return tool.handler(
+        prepareArgs(tool.inputSchema, {
+          item_keys: [item.key],
+          fix_item_type: fix,
+        }),
+        context(fixtureClient([ieee, vague])),
+      ) as Promise<any>;
+    };
+    const typeOf = (item: Zotero.Item) =>
+      Zotero.ItemTypes.getName(item.itemTypeID);
+
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", ieee.title!);
+    item.setField("DOI", ieee.externalIds!.DOI!);
+    item.setField("publicationTitle", ieee.venue!);
+    await item.saveTx();
+    const chapter = new Zotero.Item("bookSection");
+    chapter.setField("title", vague.title!);
+    chapter.setField("extra", `DOI: ${vague.externalIds!.DOI}`);
+    await chapter.saveTx();
+    try {
+      const untouched = await enrich(item, false);
+      assert.isUndefined(untouched.results[0].itemType);
+      assert.equal(typeOf(item), "journalArticle");
+
+      const fixed = await enrich(item, true);
+      assert.deepEqual(fixed.results[0].itemType, {
+        from: "journalArticle",
+        to: "conferencePaper",
+      });
+      assert.equal(typeOf(item), "conferencePaper");
+      // Zotero carries the venue over to the new type's field
+      assert.equal(item.getField("proceedingsTitle"), ieee.venue);
+      assert.equal(item.getField("DOI"), ieee.externalIds!.DOI);
+
+      const again = await enrich(item, true);
+      assert.isUndefined(again.results[0].itemType, "idempotent");
+
+      const kept = await enrich(chapter, true);
+      assert.isTrue(kept.results[0].matched);
+      assert.isUndefined(kept.results[0].itemType);
+      assert.equal(typeOf(chapter), "bookSection");
+    } finally {
+      await item.eraseTx();
+      await chapter.eraseTx();
+    }
   });
 
   it("matches an item without ids by its title", async function () {
@@ -375,7 +791,7 @@ describe("zotero_enrich_items", function () {
     const tool = TOOLS_BY_NAME.get("zotero_enrich_items")!;
     const res = (await tool.handler(
       prepareArgs(tool.inputSchema, { item_keys: [item.key] }),
-      { s2, stats: newStats() },
+      context(s2),
     )) as any;
     assert.isFalse(res.results[0].matched);
     assert.equal(item.getField("extra"), "", "no S2 id recorded");
@@ -418,6 +834,34 @@ describe("fields override on recommendations and author papers", function () {
     assert.equal(authorRaw.papers[0].paperId, ATTENTION.paperId);
     assert.property(authorRaw.papers[0], "externalIds");
     assert.match(calls[2], /\/author\/40348417\/papers\?.*fields=title/);
+  });
+
+  it("drops the open-access disclaimer from raw papers", async function () {
+    const disclaimer = "Notice: Paper or abstract available at… ".repeat(8);
+    const paper = {
+      ...DEEP_LEARNING,
+      openAccessPdf: { url: "https://x.org/a.pdf", status: "GOLD", disclaimer },
+    } as S2Paper;
+    const tidy = { url: "https://x.org/a.pdf", status: "GOLD" };
+    const run = (name: string, args: Record<string, unknown>) => {
+      const tool = TOOLS_BY_NAME.get(name)!;
+      return tool.handler(
+        prepareArgs(tool.inputSchema, { ...args, fields: "openAccessPdf" }),
+        context(fixtureClient([paper])),
+      ) as Promise<any>;
+    };
+    const search = await run("s2_search_papers", { query: "x" });
+    assert.deepEqual(search.papers[0].openAccessPdf, tidy);
+    const got = await run("s2_get_papers", { ids: [paper.paperId] });
+    assert.deepEqual(got.papers[0].paper.openAccessPdf, tidy);
+    const match = await run("s2_match_title", { title: paper.title });
+    assert.deepEqual(match.openAccessPdf, tidy);
+    const cites = await run("s2_get_citations", { paper_id: paper.paperId });
+    assert.deepEqual(cites.data[0].citingPaper.openAccessPdf, tidy);
+    // A paper without the field passes through untouched
+    assert.isNull(
+      (await run("s2_get_papers", { ids: ["CorpusId:0"] })).papers[0].paper,
+    );
   });
 });
 
@@ -471,6 +915,64 @@ describe("adding PDF files", function () {
   after(async function () {
     await Zotero.Items.erase(created);
     await IOUtils.remove(dir, { recursive: true, ignoreAbsent: true });
+  });
+
+  it("lists an item's attachments with their paths on request", async function () {
+    const parent = await parentItem("Attachment listing test");
+    parent.setField("DOI", "10.5555/attachment.listing");
+    await parent.saveTx();
+    const added = await runTool("zotero_add_pdf_file", {
+      path: await file("listed.pdf", pdfBytes()),
+      parent_item_key: parent.key,
+    });
+    track(added);
+    const find = (include: boolean) =>
+      runTool("zotero_find_in_library", {
+        ids: ["DOI:10.5555/attachment.listing"],
+        resolve_via_s2: false,
+        include_attachments: include,
+      });
+    assert.notProperty((await find(false)).results[0].item, "attachments");
+    const [att] = (await find(true)).results[0].item.attachments;
+    assert.equal(att.key, added.attachmentKey);
+    assert.equal(att.contentType, "application/pdf");
+    assert.match(att.filename, /\.pdf$/);
+    // A real file an agent can open
+    assert.isTrue(PathUtils.isAbsolute(att.path));
+    assert.deepEqual(
+      Array.from(await IOUtils.read(att.path, { maxBytes: 5 })),
+      Array.from(new TextEncoder().encode("%PDF-")),
+    );
+
+    const collection = (
+      await resolveCollection(parent.libraryID, `${ROOT}/Listed`, true)
+    ).collection;
+    parent.addToCollection(collection.id);
+    await parent.saveTx();
+    const listed = await runTool("zotero_list_collection_items", {
+      collection: collection.key,
+      include_attachments: true,
+    });
+    assert.equal(listed.items[0].attachments[0].path, att.path);
+    const plain = await runTool("zotero_list_collection_items", {
+      collection: collection.key,
+    });
+    assert.notProperty(plain.items[0], "attachments");
+
+    // Web-link attachments and missing-on-disk files must report path: null
+    const linkAtt = await Zotero.Attachments.linkFromURL({
+      url: "https://example.org/paper",
+      parentItemID: parent.id,
+      title: "Publisher link",
+    });
+    created.push(linkAtt.id);
+    await IOUtils.remove(att.path);
+    const afterMissing = (await find(true)).results[0].item.attachments;
+    const byKey = new Map<string, any>(
+      afterMissing.map((a: any) => [a.key, a]),
+    );
+    assert.isNull(byKey.get(added.attachmentKey).path);
+    assert.isNull(byKey.get(linkAtt.key).path);
   });
 
   it("attaches a local file to a parent, once per distinct file", async function () {
@@ -612,22 +1114,32 @@ describe("adding PDF files", function () {
     let api: any;
     let original: any;
     let seen: any[];
+    // What a look at the failing page would find (a real request otherwise)
+    let page: { reason: string; file: boolean } | null;
+    let probePage: typeof pdfDeps.probePage;
 
     beforeEach(function () {
+      probePage = pdfDeps.probePage;
       api = Zotero.Attachments;
       original = api.downloadFirstAvailableFile;
       seen = [];
+      page = null;
+      pdfDeps.probePage = async () => page;
     });
 
     afterEach(function () {
       api.downloadFirstAvailableFile = original;
+      pdfDeps.probePage = probePage;
     });
-    function stub(ok: boolean) {
+    function stub(ok: boolean, errors: unknown[] = []) {
       api.downloadFirstAvailableFile = async (
         resolvers: any[],
         path: string,
+        options: any,
       ) => {
         seen.push(...resolvers);
+        // Zotero reports each failed request, then carries on
+        for (const e of errors) assert.isFalse(options.onRequestError(e));
         if (!ok) return false;
         await IOUtils.write(path, pdfBytes());
         return { url: "https://example.org/files/landing.pdf", props: {} };
@@ -680,6 +1192,104 @@ describe("adding PDF files", function () {
       }
       assert.lengthOf(parent.getAttachments(), 0);
     });
+
+    it("says why the download failed", async function () {
+      const fail = async (errors: unknown[]) => {
+        stub(false, errors);
+        const err = await runTool("zotero_add_pdf_from_url", {
+          url: "https://example.org/paper",
+          recognize: false,
+        }).catch((e) => e);
+        assert.instanceOf(err, ToolError);
+        return (err as Error).message;
+      };
+      const status = (code: number) => ({
+        status: code,
+        url: "https://dl.example.org/doi/pdf/10.1/x",
+        message: `HTTP GET failed with status code ${code}`,
+      });
+      assert.match(
+        await fail([status(403)]),
+        /dl\.example\.org refused the download \(HTTP 403\).*zotero_add_pdf_file/,
+      );
+      assert.match(await fail([status(404)]), /nothing at that address/);
+      assert.match(await fail([status(503)]), /answered HTTP 503/);
+      assert.match(
+        await fail([new (Zotero.Attachments as any).InvalidPDFException()]),
+        /was not a PDF/,
+      );
+      // The same reason twice is said once
+      const twice = await fail([status(403), status(403)]);
+      assert.lengthOf(twice.match(/HTTP 403/g)!, 1);
+      // No request failed: the site sent a page instead, so we look at it
+      page = { reason: "hal.example answered with a bot check", file: false };
+      seen.length = 0;
+      assert.include(await fail([]), page.reason);
+      assert.lengthOf(seen, 1, "a bot check is not downloaded again");
+      // A request error already explains it; no extra request then
+      page = { reason: "not used", file: false };
+      assert.notInclude(await fail([status(403)]), "not used");
+      page = null;
+      assert.match(await fail([]), /no PDF link was found/);
+    });
+
+    it("downloads a file the site sends with another content type", async function () {
+      // Zotero's page handling skips it; the plain download then gets it
+      api.downloadFirstAvailableFile = async (
+        resolvers: any[],
+        path: string,
+      ) => {
+        seen.push(...resolvers);
+        if (!resolvers[0].url) return false;
+        await IOUtils.write(path, pdfBytes());
+        return { url: resolvers[0].url, props: {} };
+      };
+      page = { reason: "sent application/octet-stream", file: true };
+      const res = await runTool("zotero_add_pdf_from_url", {
+        url: "https://example.org/1/2/pdf",
+        recognize: false,
+      });
+      assert.isTrue(track(res).isPDFAttachment());
+      assert.deepEqual(
+        seen.map((r) => Object.keys(r)[0]),
+        ["pageURL", "url"],
+      );
+    });
+
+    it("sends local files and local servers to zotero_add_pdf_file", async function () {
+      stub(true);
+      const file = await runTool("zotero_add_pdf_from_url", {
+        url: "file:///home/me/My%20Papers/a.pdf",
+      }).catch((e) => e);
+      assert.instanceOf(file, ToolError);
+      assert.include(
+        file.message,
+        'zotero_add_pdf_file with path "/home/me/My Papers/a.pdf"',
+      );
+      const winFile = await runTool("zotero_add_pdf_from_url", {
+        url: "file:///C:/Users/paper.pdf",
+      }).catch((e) => e);
+      assert.instanceOf(winFile, ToolError);
+      assert.include(
+        winFile.message,
+        'zotero_add_pdf_file with path "C:/Users/paper.pdf"',
+      );
+      for (const url of [
+        "http://localhost:8765/a.pdf",
+        "http://127.0.0.1:8765/a.pdf",
+        "http://127.0.0.2/a.pdf",
+        "http://0.0.0.0:8000/a.pdf",
+        "http://user@127.0.0.1/a.pdf",
+        "http://[::1]:8080/a.pdf",
+      ]) {
+        const local = await runTool("zotero_add_pdf_from_url", { url }).catch(
+          (e) => e,
+        );
+        assert.instanceOf(local, ToolError);
+        assert.match(local.message, /zotero_add_pdf_file with its path/);
+      }
+      assert.lengthOf(seen, 0, "nothing was downloaded");
+    });
   });
 });
 
@@ -693,6 +1303,7 @@ describe("tool annotations", function () {
     for (const name of [
       "zotero_create_collection",
       "zotero_add_papers",
+      "zotero_move_items",
       "zotero_attach_pdf",
       "zotero_add_pdf_from_url",
       "zotero_add_pdf_file",
@@ -714,7 +1325,47 @@ describe("tool schemas", function () {
     const tool = TOOLS_BY_NAME.get("zotero_list_collections")!;
     assert.throws(
       () => prepareArgs(tool.inputSchema, { bogus: 1 }),
-      /Unknown argument "bogus"/,
+      /Unknown argument "bogus"\. Accepted arguments: library_id/,
     );
+    assert.throws(
+      () => prepareArgs(tool.inputSchema, { libraryID: 1 }),
+      /Unknown argument "libraryID"\. Did you mean "library_id"\? Accepted arguments: library_id/,
+    );
+  });
+
+  it("accepts integer year filters and explains empty s2_recommend results", async function () {
+    const calls: string[] = [];
+    await runTool(
+      "s2_search_papers",
+      { query: "attention", year: 2020 },
+      calls,
+    );
+    await runTool(
+      "s2_search_papers_bulk",
+      { query: "attention", year: 2021 },
+      calls,
+    );
+    await runTool(
+      "s2_snippet_search",
+      { query: "attention", year: 2022 },
+      calls,
+    );
+    assert.match(calls[0], /year=2020/);
+    assert.match(calls[1], /year=2021/);
+    assert.match(calls[2], /year=2022/);
+
+    const recTool = TOOLS_BY_NAME.get("s2_recommend")!;
+    const emptyS2 = new S2Client({
+      apiKey: () => "k",
+      limiter: new RateLimiter(0),
+      transport: async () => response(200, { recommendedPapers: [] }),
+    });
+    const rec = (await recTool.handler(
+      prepareArgs(recTool.inputSchema, { positive_ids: [ATTENTION.paperId] }),
+      context(emptyS2),
+    )) as any;
+    assert.deepEqual(rec.papers, []);
+    assert.match(rec.note, /all-cs/);
+    assert.match(rec.note, /computer science/i);
   });
 });
