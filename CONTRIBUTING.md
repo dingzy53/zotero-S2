@@ -26,7 +26,7 @@ npx zotero-plugin test --no-watch --exit-on-finish   # one CI-style run
 npm run test:bridge  # the stdio bridge, in plain Node (no Zotero)
 ```
 
-Before opening a pull request, run `npm run build`, `npm run lint:check` and the CI-style test run. All three must pass.
+Before opening a pull request, run `npm run build`, `npm run lint:check`, `npm run test:bridge` and the CI-style test run. All four must pass.
 
 ## Tests
 

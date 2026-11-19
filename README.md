@@ -77,7 +77,7 @@ The bridge is a small script with no dependencies (it needs Node.js 18 or later)
 - While Zotero is closed, the tools are still listed (from the list saved at the last successful call), and a tool call answers "Zotero isn't running; start it and retry".
 - Once Zotero is open, calls work. No reconnect is needed.
 
-It reads the token from `ZOTERO_S2_TOKEN`, and the endpoint from `ZOTERO_S2_URL` if Zotero doesn't use the default port. It only talks to `127.0.0.1`. Use either the HTTP command or the bridge, not both under the same name.
+It reads the token from `ZOTERO_S2_TOKEN`, and the endpoint from `ZOTERO_S2_URL` if Zotero doesn't use the default port. It only talks to a loopback address (`127.0.0.1`, `localhost`, `[::1]`). Use either the HTTP command or the bridge, not both under the same name.
 
 ## Search window
 
