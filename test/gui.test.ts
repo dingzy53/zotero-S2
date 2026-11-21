@@ -595,9 +595,12 @@ describe("search window: memory and export", function () {
     ctl.current.selection.add(FIXTURES[0].paperId);
     ctl.current.selection.add(FIXTURES[1].paperId);
     const bib = await ctl.exportText("bibtex");
-    assert.equal(bib.count, 1);
-    assert.equal(bib.missing, 1);
-    assert.equal(bib.text, `@misc{${FIXTURES[0].paperId}}\n`);
+    // S2 has none for FIXTURES[1]: built from the loaded metadata
+    assert.equal(bib.count, 2);
+    assert.equal(bib.missing, 0);
+    assert.isTrue(bib.text.startsWith(`@misc{${FIXTURES[0].paperId}}\n\n`));
+    assert.include(bib.text, "@article{LeCun2015Deep,");
+    assert.include(bib.text, "doi = {10.1038/nature14539}");
     assert.match(calls.at(-1)!, /POST .*\/paper\/batch\?fields=citationStyles/);
     const ris = await ctl.exportText("ris");
     assert.equal(ris.count, 2);

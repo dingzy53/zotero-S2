@@ -540,7 +540,7 @@ export class SearchController implements ViewHost, AddHost {
 
   /**
    * Serializes the export set. BibTeX comes from S2, 500 papers per call, and
-   * is checked against the loaded metadata.
+   * is checked against (or, when S2 has none, built from) the loaded metadata.
    */
   async exportText(
     format: ExportFormat,

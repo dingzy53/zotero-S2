@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import {
+  bibtexFromPaper,
   joinBibtex,
   normalizeBibtexEntry,
   toCSV,
@@ -126,6 +127,51 @@ describe("gui export", function () {
       [DEEP_LEARNING],
     );
     assert.include(text, "doi = {10.1038/nature14539}");
+  });
+
+  it("builds BibTeX from metadata when S2 has none", function () {
+    const deep = bibtexFromPaper(DEEP_LEARNING);
+    assert.equal(
+      deep,
+      "@article{LeCun2015Deep,\n" +
+        "  author = {Yann LeCun and Yoshua Bengio and Geoffrey E. Hinton},\n" +
+        "  title = {Deep Learning},\n" +
+        "  journal = {Nature},\n" +
+        "  volume = {521},\n" +
+        "  pages = {436-444},\n" +
+        "  year = {2015},\n" +
+        "  doi = {10.1038/nature14539}\n}",
+    );
+    const attention = bibtexFromPaper(ATTENTION);
+    assert.match(attention, /^@inproceedings\{Vaswani2017Attention,\n/);
+    assert.include(
+      attention,
+      "booktitle = {Neural Information Processing Systems}",
+    );
+    assert.include(attention, "eprint = {1706.03762}");
+    assert.include(bibtexFromPaper(ARXIV_ONLY), "@article{Beethoven2024A,");
+    const bare = bibtexFromPaper({
+      paperId: "0123456789abcdef",
+      title: "Braces {in} a } title",
+      publicationTypes: null,
+    });
+    assert.match(bare, /^@misc\{Braces,\n/);
+    assert.include(bare, "title = {Braces \\{in\\} a \\} title}");
+    assert.equal(
+      bibtexFromPaper({ paperId: "0123456789abcdef", year: 2020 }),
+      "@misc{S20123456789,\n  year = {2020}\n}",
+    );
+
+    const { text, missing } = joinBibtex(
+      [
+        { id: DEEP_LEARNING.paperId, paper: { citationStyles: null } },
+        { id: ATTENTION.paperId, paper: null },
+        { id: "unknown", paper: null },
+      ],
+      [DEEP_LEARNING, ATTENTION],
+    );
+    assert.equal(text, `${deep}\n\n${attention}\n`);
+    assert.deepEqual(missing, ["unknown"]);
   });
 });
 
