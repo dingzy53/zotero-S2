@@ -80,19 +80,57 @@ export function toRIS(papers: readonly S2Paper[]): string {
   return out.join("\r\n");
 }
 
+/** Brace-delimited BibTeX values: escape braces so a title can't end them. */
+function bibValue(s: string): string {
+  return oneLine(s).replace(/[{}]/g, (c) => `\\${c}`);
+}
+
+/**
+ * Fixes two known flaws in S2's `citationStyles.bibtex`: conference papers
+ * come back as `@Article` with a `booktitle` (and no `journal`), and `doi` is
+ * left out even when S2 knows it. `paper` is the search result's metadata.
+ */
+export function normalizeBibtexEntry(raw: string, paper?: S2Paper): string {
+  let bib = raw.trim();
+  if (
+    /^@article\s*\{/i.test(bib) &&
+    /\bbooktitle\s*=/i.test(bib) &&
+    !/\bjournal\s*=/i.test(bib)
+  ) {
+    const types = paper?.publicationTypes ?? [];
+    if (types.includes("JournalArticle") && !types.includes("Conference"))
+      bib = bib.replace(/\bbooktitle(\s*=)/i, "journal$1");
+    else bib = bib.replace(/^@article\s*\{/i, "@inproceedings{");
+  }
+  const doi = paper?.externalIds?.DOI;
+  const close = bib.lastIndexOf("}");
+  if (doi && close > 0 && !/\bdoi\s*=/i.test(bib)) {
+    const before = bib.slice(0, close).trimEnd();
+    const comma = before.endsWith(",") ? "" : ",";
+    bib = `${before}${comma}\n  doi = {${bibValue(doi)}}\n${bib.slice(close)}`;
+  }
+  return bib;
+}
+
 /**
  * Joins S2's BibTeX entries (`citationStyles.bibtex` from `s2_get_papers`),
- * and names the papers S2 had none for.
+ * normalized against the search results' metadata in `papers`, and names the
+ * papers S2 had none for.
  */
-export function joinBibtex(rows: ReadonlyArray<{ id: string; paper: any }>): {
+export function joinBibtex(
+  rows: ReadonlyArray<{ id: string; paper: any }>,
+  papers: readonly S2Paper[] = [],
+): {
   text: string;
   missing: string[];
 } {
+  const known = new Map(papers.map((p) => [p.paperId, p]));
   const entries: string[] = [];
   const missing: string[] = [];
   for (const row of rows) {
+    const paper = known.get(row.id);
     const bib = row.paper?.citationStyles?.bibtex;
-    if (bib) entries.push(String(bib).trim());
+    if (bib) entries.push(normalizeBibtexEntry(String(bib), paper));
     else missing.push(row.id);
   }
   return { text: entries.length ? entries.join("\n\n") + "\n" : "", missing };
