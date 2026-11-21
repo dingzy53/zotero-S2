@@ -538,7 +538,10 @@ export class SearchController implements ViewHost, AddHost {
     return selected.length ? selected : (this.current?.papers ?? []);
   }
 
-  /** Serializes the export set; BibTeX comes from S2, 500 papers per call. */
+  /**
+   * Serializes the export set. BibTeX comes from S2, 500 papers per call, and
+   * is checked against (or, when S2 has none, built from) the loaded metadata.
+   */
   async exportText(
     format: ExportFormat,
   ): Promise<{ text: string; count: number; missing: number } | null> {
@@ -568,7 +571,7 @@ export class SearchController implements ViewHost, AddHost {
       }
       rows.push(...((outcome.value as any).papers ?? []));
     }
-    const { text, missing } = joinBibtex(rows);
+    const { text, missing } = joinBibtex(rows, papers);
     return {
       text,
       count: rows.length - missing.length,

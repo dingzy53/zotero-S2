@@ -1,5 +1,11 @@
 import { assert } from "chai";
-import { joinBibtex, toCSV, toRIS } from "../src/gui/export";
+import {
+  bibtexFromPaper,
+  joinBibtex,
+  normalizeBibtexEntry,
+  toCSV,
+  toRIS,
+} from "../src/gui/export";
 import {
   HISTORY_MAX,
   addHistory,
@@ -49,6 +55,123 @@ describe("gui export", function () {
     assert.equal(text, "@article{a}\n\n@inproceedings{c}\n");
     assert.deepEqual(missing, ["b"]);
     assert.equal(joinBibtex([]).text, "");
+  });
+
+  it("rewrites S2's @Article with booktitle as @inproceedings", function () {
+    const raw =
+      "@Article{Vaswani2017AttentionIA,\n" +
+      " author = {Ashish Vaswani and Noam M. Shazeer},\n" +
+      " booktitle = {Neural Information Processing Systems},\n" +
+      " title = {Attention is All you Need},\n" +
+      " year = {2017}\n}\n";
+    const paper = {
+      ...ATTENTION,
+      externalIds: { ...ATTENTION.externalIds, DOI: "10.5555/3295222" },
+    };
+    const bib = normalizeBibtexEntry(raw, paper);
+    assert.match(bib, /^@inproceedings\{Vaswani2017AttentionIA,\n/);
+    assert.include(bib, "booktitle = {Neural Information Processing Systems}");
+    assert.include(bib, " year = {2017},\n  doi = {10.5555/3295222}\n}");
+    assert.notInclude(bib, "journal");
+    // Without metadata the booktitle still decides
+    assert.match(normalizeBibtexEntry(raw), /^@inproceedings\{/);
+    assert.notInclude(normalizeBibtexEntry(raw), "doi");
+    // A journal article keeps @Article and gets a journal instead
+    const journal = normalizeBibtexEntry(raw, {
+      ...paper,
+      publicationTypes: ["JournalArticle"],
+    });
+    assert.match(journal, /^@Article\{/);
+    assert.include(journal, " journal = {Neural Information Processing");
+    assert.notInclude(journal, "booktitle");
+    // @Article with a journal is left alone, whatever the paper type
+    const arxiv = "@article{x,\n journal = {ArXiv},\n booktitle = {B}\n}";
+    assert.match(
+      normalizeBibtexEntry(arxiv, {
+        ...ATTENTION,
+        publicationTypes: ["Conference"],
+      }),
+      /^@article\{/,
+    );
+  });
+
+  it("adds a missing DOI to S2's BibTeX once", function () {
+    const raw =
+      "@Article{LeCun2015DeepL,\n journal = {Nature},\n title = {Deep Learning},\n year = {2015}\n}";
+    const bib = normalizeBibtexEntry(raw, DEEP_LEARNING);
+    assert.match(bib, /^@Article\{LeCun2015DeepL,/);
+    assert.isTrue(
+      bib.endsWith(" year = {2015},\n  doi = {10.1038/nature14539}\n}"),
+    );
+    // Already there, in any case: not duplicated
+    const has = raw.replace("}\n}", "},\n DOI = {10.1038/NATURE14539}\n}");
+    assert.equal(normalizeBibtexEntry(has, DEEP_LEARNING), has);
+    // A trailing comma is not doubled
+    const trailing = raw.replace("{2015}\n}", "{2015},\n}");
+    assert.include(
+      normalizeBibtexEntry(trailing, DEEP_LEARNING),
+      "{2015},\n  doi = {10.1038/nature14539}\n}",
+    );
+    // An entry with no fields gets the comma after its key
+    assert.equal(
+      normalizeBibtexEntry("@misc{k}", DEEP_LEARNING),
+      "@misc{k,\n  doi = {10.1038/nature14539}\n}",
+    );
+    const { text } = joinBibtex(
+      [
+        {
+          id: DEEP_LEARNING.paperId,
+          paper: { citationStyles: { bibtex: raw } },
+        },
+      ],
+      [DEEP_LEARNING],
+    );
+    assert.include(text, "doi = {10.1038/nature14539}");
+  });
+
+  it("builds BibTeX from metadata when S2 has none", function () {
+    const deep = bibtexFromPaper(DEEP_LEARNING);
+    assert.equal(
+      deep,
+      "@article{LeCun2015Deep,\n" +
+        "  author = {Yann LeCun and Yoshua Bengio and Geoffrey E. Hinton},\n" +
+        "  title = {Deep Learning},\n" +
+        "  journal = {Nature},\n" +
+        "  volume = {521},\n" +
+        "  pages = {436-444},\n" +
+        "  year = {2015},\n" +
+        "  doi = {10.1038/nature14539}\n}",
+    );
+    const attention = bibtexFromPaper(ATTENTION);
+    assert.match(attention, /^@inproceedings\{Vaswani2017Attention,\n/);
+    assert.include(
+      attention,
+      "booktitle = {Neural Information Processing Systems}",
+    );
+    assert.include(attention, "eprint = {1706.03762}");
+    assert.include(bibtexFromPaper(ARXIV_ONLY), "@article{Beethoven2024A,");
+    const bare = bibtexFromPaper({
+      paperId: "0123456789abcdef",
+      title: "Braces {in} a } title",
+      publicationTypes: null,
+    });
+    assert.match(bare, /^@misc\{Braces,\n/);
+    assert.include(bare, "title = {Braces \\{in\\} a \\} title}");
+    assert.equal(
+      bibtexFromPaper({ paperId: "0123456789abcdef", year: 2020 }),
+      "@misc{S20123456789,\n  year = {2020}\n}",
+    );
+
+    const { text, missing } = joinBibtex(
+      [
+        { id: DEEP_LEARNING.paperId, paper: { citationStyles: null } },
+        { id: ATTENTION.paperId, paper: null },
+        { id: "unknown", paper: null },
+      ],
+      [DEEP_LEARNING, ATTENTION],
+    );
+    assert.equal(text, `${deep}\n\n${attention}\n`);
+    assert.deepEqual(missing, ["unknown"]);
   });
 });
 

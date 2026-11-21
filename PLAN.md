@@ -1,3 +1,100 @@
+# PLAN: 2026-11-20 test report fixes (BibTeX export `@Article` with `booktitle` and missing DOI)
+
+> Branch: `fix/bibtex-export` (from `main` at `c56b7b9`, tag `v0.2.0`) · Date: 2026-11-20 · Status: Item 1 fixed on this branch; item 2 is an operational note, not implemented.
+>
+> Earlier plans and deferred testing notes are preserved below the separator.
+
+## Context
+
+In the 2026-11-20 hands-on test report on macOS 14 (Zotero 10.0.9):
+
+- Auto-update to `0.2.0`, all MCP tools (`s2_match_title`, `s2_get_papers`, `zotero_find_in_library` with rate-limit fallback, `zotero_add_papers`, `zotero_list_collection_items`, `s2_recommend`, `s2_snippet_search`, `s2_get_citations`), HTTP 401/403 checks, and the Search window (query restore, advanced filters, ✓ In library marks, cards/table views, detail pane, Similar papers with breadcrumb, API key Test) **passed**.
+- One minor bug and one operational note were reported:
+  1. **Minor bug:** in the Search window, **Export → Copy BibTeX** produces an `@Article` entry with a `booktitle` field and no `doi`.
+  2. **Operational note:** parallel calls hit S2 429s; the plugin backed off and returned a clear error. Four `zotero-s2-mcp.mjs` bridge processes from other agent sessions were running on the machine and sharing the API key.
+
+---
+
+## 1. BibTeX export has `@Article` with `booktitle` and no `doi`
+
+**Done.** `normalizeBibtexEntry` and `bibtexFromPaper` in `src/gui/export.ts`; `joinBibtex(rows, papers)` from `exportText`. Tested in `test/gui.export.test.ts` and `test/gui.test.ts`. The optional arXiv `eprint` is added only to synthesized entries.
+
+### Symptom
+
+Clicking **Export → Copy BibTeX** (or **Save BibTeX…**) in the Semantic Scholar search window copies a BibTeX entry such as:
+
+```bibtex
+@Article{Vaswani2017AttentionIA,
+  author = {Ashish Vaswani and ...},
+  booktitle = {Neural Information Processing Systems},
+  title = {Attention is All you Need},
+  year = {2017}
+}
+```
+
+Notice two problems:
+
+1. `@Article` with `booktitle` (and no `journal`) is invalid in standard BibTeX styles (`@article` requires `journal`; a conference proceedings paper with `booktitle` must be `@inproceedings`, or `@article` must use `journal`).
+2. `doi` (and `url` / `eprint`) is missing even when the paper in the search results already has `externalIds.DOI` (or `externalIds.ArXiv`).
+
+### Cause (verified in `src/gui/controller.ts:558-576` and `src/gui/export.ts:87-99`)
+
+1. `SearchController.exportText("bibtex")` (`src/gui/controller.ts:558-571`) fetches only `fields: "citationStyles"` from `s2_get_papers` and passes the raw S2 response to `joinBibtex(rows)` (`src/gui/export.ts:87-99`).
+2. `joinBibtex(rows)` outputs `row.paper?.citationStyles?.bibtex` verbatim.
+3. Semantic Scholar's upstream `citationStyles.bibtex` generator is known to emit `@Article` with `booktitle = {...}` for conference papers (including NeurIPS, ICML, ACL, CVPR) and frequently omits `doi = {...}` even when `externalIds.DOI` is known on the paper!
+4. Furthermore, the search window **already holds** the full `S2Paper` objects in `this.exportPapers()` (`src/gui/controller.ts:536-539`), complete with `publicationTypes`, `externalIds.DOI`, `externalIds.ArXiv`, `journal`, `venue`, `publicationVenue`, `year`, `title`, and `authors` (because `GUI_FIELDS` in `src/s2/fields.ts` includes all of them!).
+
+### Fix
+
+In `src/gui/export.ts` (and `src/gui/controller.ts:558-571`):
+
+1. **Pass the known `S2Paper` metadata into `joinBibtex` (or normalize each BibTeX entry with `normalizeBibtexEntry(rawBibtex: string, paper?: S2Paper)` in `src/gui/export.ts`):**
+   - **Fix entry type vs `booktitle` / `journal` mismatch:**
+     - If the entry header is `@Article{...}` (case-insensitive) and the body contains `booktitle =` with no `journal =`:
+       - If the paper is a conference paper (`paper?.publicationTypes?.includes("Conference")` or `paper?.publicationVenue?.type === "conference"`, or `booktitle` is present with no `journal` and not a journal article), rewrite `@Article{` → `@inproceedings{`.
+       - Conversely, if `paper?.publicationTypes?.includes("JournalArticle")` (and not `"Conference"`), rewrite `booktitle =` → `journal =`.
+   - **Inject missing `doi` (and `eprint` / `archivePrefix` for arXiv-only preprints when missing):**
+     - If `paper?.externalIds?.DOI` is present and the BibTeX entry has no `\bdoi\s*=` field (case-insensitive), insert `  doi = {${paper.externalIds.DOI}},` before the closing `}`.
+     - Optional: if the paper has no DOI and no `journal`/`booktitle`, or is an arXiv preprint with `paper?.externalIds?.ArXiv` and no `eprint` / `journal`, include `eprint = {${paper.externalIds.ArXiv}}, archivePrefix = {arXiv}`.
+   - **Fallback BibTeX synthesis when S2's `citationStyles.bibtex` is missing (`row.paper?.citationStyles?.bibtex` is null/empty):**
+     - Build a clean BibTeX entry directly from `S2Paper` (`@inproceedings`, `@article`, or `@misc`) so `missing` drops to 0 for any paper in the table!
+
+---
+
+## 2. Multiple `zotero-s2-mcp.mjs` bridge processes from concurrent sessions
+
+### Investigation (verified in `addon/content/bridge/zotero-s2-mcp.mjs:342, 377-390` and `src/s2/rateLimiter.ts`)
+
+- In `addon/content/bridge/zotero-s2-mcp.mjs`:
+  - Line 342: the offline watch `setInterval` timer calls `timer.unref()`, so it never keeps Node alive after stdin closes.
+  - Lines 385-390: `lines.on("close", ...)` waits for in-flight requests and cache writes, then calls `process.exit(0)`.
+- In `src/s2/client.ts` and `src/s2/rateLimiter.ts`:
+  - All stdio bridge processes forward to the single HTTP endpoint inside Zotero (`http://127.0.0.1:23119/s2/mcp`), so all requests pass through the plugin's single in-process `RateLimiter` queue.
+- **Why 4 bridge processes existed:** MCP clients (such as 4 open Claude Code / IDE windows or subagents on the host) each spawn their own stdio child process for the duration of their session. When one session issues parallel tool calls (or several sessions call S2 at the same time), requests queue behind the 1 RPS limit; if the key is also used outside Zotero or S2 returns 429, the plugin backs off and surfaces the `"wait and retry"` message as designed.
+- **Optional hardening in `zotero-s2-mcp.mjs`:** also listen to `process.stdin.on("end", ...)` and check parent liveness (`process.ppid === 1` poll or `SIGHUP`/`SIGTERM` handler) in case a crashed client leaves a pipe descriptor open without closing stdin.
+
+---
+
+## Order of work
+
+1. [x] `Normalize exported BibTeX entries (@inproceedings for booktitle and add missing DOI)` (`src/gui/export.ts`, `src/gui/controller.ts`, `test/gui.export.test.ts`).
+2. [x] Run `npx prettier --write` on touched files and verify `npm run lint:check` and `npm run build`.
+
+## Verification
+
+- `npm run build`, `npm run lint:check`, `npx prettier --check .`.
+- Unit tests in `test/gui.export.test.ts`:
+  - `@Article` with `booktitle` and `ATTENTION` (`externalIds.DOI`) → `@inproceedings` with `booktitle` and `doi = {10.48550/arXiv.1706.03762}` (or the paper's DOI).
+  - `@Article` with `journal` and `DEEP_LEARNING` (`externalIds.DOI: "10.1038/nature14539"`) lacking `doi` in S2's raw BibTeX → keeps `@article` and adds `doi = {10.1038/nature14539}`.
+  - Entry that already has `doi = {...}` → not duplicated.
+
+## Open questions for the owner
+
+1. When S2 returns `citationStyles.bibtex: null` for a paper that is present in the search results table, should `joinBibtex` synthesize a BibTeX entry from the `S2Paper` metadata we already have instead of skipping the paper as "missing"?
+   - Answered: yes. `bibtexFromPaper` builds it; only papers with no metadata are still missing.
+
+---
+
 # PLAN: install the stdio bridge from a packed .xpi
 
 > Branch `fix/agent-usage-findings`. Written 2026-11-15. Fixed on this branch (`src/modules/bridge.ts` now uses `Zotero.File.getResourceAsync`, tested in `test/startup.test.ts`).
