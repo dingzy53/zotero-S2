@@ -85,30 +85,311 @@ function bibValue(s: string): string {
   return oneLine(s).replace(/[{}]/g, (c) => `\\${c}`);
 }
 
+function formatBibField(name: string, value: string): string {
+  return `  ${name} = {${bibValue(value)}}`;
+}
+
+const ARXIV_VOLUME = /^abs\/(.+)$/;
+
+/** BibTeX fields identifying an arXiv preprint. */
+function arxivFields(arxivId: string): Array<[string, string]> {
+  return [
+    ["eprint", arxivId],
+    ["archivePrefix", "arXiv"],
+  ];
+}
+
+/** Strips one outer layer of balanced `{…}` or `"…"` from a BibTeX value. */
+function unquoteBibValue(raw: string): string {
+  const s = raw.trim();
+  if (s.length >= 2 && s[0] === "{" && s[s.length - 1] === "}") {
+    let depth = 0;
+    let closesAtEnd = true;
+    for (let i = 0; i < s.length - 1; i++) {
+      if (s[i] === "\\" && i + 1 < s.length - 1) {
+        i++;
+        continue;
+      }
+      if (s[i] === "{") depth++;
+      else if (s[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          closesAtEnd = false;
+          break;
+        }
+      }
+    }
+    if (closesAtEnd && depth === 1) return s.slice(1, -1).trim();
+  }
+  if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') {
+    let depth = 0;
+    let closesAtEnd = true;
+    for (let i = 1; i < s.length - 1; i++) {
+      if (s[i] === "\\" && i + 1 < s.length - 1) {
+        i++;
+        continue;
+      }
+      if (s[i] === "{") depth++;
+      else if (s[i] === "}" && depth > 0) depth--;
+      else if (s[i] === '"' && depth === 0) {
+        closesAtEnd = false;
+        break;
+      }
+    }
+    if (closesAtEnd && depth === 0) return s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+interface BibField {
+  name: string;
+  nameStart: number;
+  nameEnd: number;
+  valueStart: number;
+  valueEnd: number;
+  commaIndex: number;
+  rawValue: string;
+}
+
 /**
- * Fixes two known flaws in S2's `citationStyles.bibtex`: conference papers
- * come back as `@Article` with a `booktitle` (and no `journal`), and `doi` is
- * left out even when S2 knows it. `paper` is the search result's metadata.
+ * Scans the top-level `field = value` assignments inside a single BibTeX
+ * entry, handling nested braces, quoted values (with escapes and braces),
+ * barewords and `#` concatenations.
+ */
+function parseBibFields(bib: string): {
+  headerComma: number;
+  fields: BibField[];
+} {
+  const fields: BibField[] = [];
+  const open = bib.indexOf("{");
+  const close = bib.lastIndexOf("}");
+  if (open === -1 || close <= open) return { headerComma: -1, fields };
+
+  let i = open + 1;
+  while (i < close && bib[i] !== "," && bib[i] !== "}" && bib[i] !== "=") i++;
+  if (i >= close || bib[i] !== ",") return { headerComma: -1, fields };
+  const headerComma = i;
+  i++;
+
+  while (i < close) {
+    while (i < close && /\s/.test(bib[i])) i++;
+    if (i >= close) break;
+    const nameStart = i;
+    while (i < close && /[A-Za-z0-9_:-]/.test(bib[i])) i++;
+    const nameEnd = i;
+    if (nameEnd === nameStart) break;
+    const name = bib.slice(nameStart, nameEnd).toLowerCase();
+
+    while (i < close && /\s/.test(bib[i])) i++;
+    if (i >= close || bib[i] !== "=") break;
+    i++;
+    while (i < close && /\s/.test(bib[i])) i++;
+
+    const valueStart = i;
+    let valueEnd = valueStart;
+    for (;;) {
+      if (i >= close) break;
+      const ch = bib[i];
+      if (ch === "{") {
+        let depth = 1;
+        i++;
+        while (i < close && depth > 0) {
+          if (bib[i] === "\\" && i + 1 < close) {
+            i += 2;
+            continue;
+          }
+          if (bib[i] === "{") depth++;
+          else if (bib[i] === "}") depth--;
+          i++;
+        }
+        if (depth !== 0) return { headerComma, fields };
+        valueEnd = i;
+      } else if (ch === '"') {
+        let depth = 0;
+        let closed = false;
+        i++;
+        while (i < close) {
+          if (bib[i] === "\\" && i + 1 < close) {
+            i += 2;
+            continue;
+          }
+          if (bib[i] === "{") depth++;
+          else if (bib[i] === "}" && depth > 0) depth--;
+          else if (bib[i] === '"' && depth === 0) {
+            i++;
+            closed = true;
+            break;
+          }
+          i++;
+        }
+        if (!closed) return { headerComma, fields };
+        valueEnd = i;
+      } else {
+        const atomStart = i;
+        while (i < close && !/[\s,#}]/.test(bib[i])) i++;
+        if (i === atomStart) break;
+        valueEnd = i;
+      }
+
+      let next = i;
+      while (next < close && /\s/.test(bib[next])) next++;
+      if (next < close && bib[next] === "#") {
+        i = next + 1;
+        while (i < close && /\s/.test(bib[i])) i++;
+        continue;
+      }
+      break;
+    }
+
+    if (valueEnd === valueStart) break;
+    while (i < close && /\s/.test(bib[i])) i++;
+    let commaIndex = -1;
+    if (i < close && bib[i] === ",") {
+      commaIndex = i;
+      i++;
+    }
+    fields.push({
+      name,
+      nameStart,
+      nameEnd,
+      valueStart,
+      valueEnd,
+      commaIndex,
+      rawValue: bib.slice(valueStart, valueEnd),
+    });
+    if (commaIndex === -1) break;
+  }
+
+  return { headerComma, fields };
+}
+
+/**
+ * Removes every occurrence of `fieldName` (case-insensitive) from a BibTeX
+ * entry without breaking surrounding fields or commas.
+ */
+export function removeBibField(bib: string, fieldName: string): string {
+  const target = fieldName.toLowerCase();
+  let result = bib;
+  for (;;) {
+    const { headerComma, fields } = parseBibFields(result);
+    const idx = fields.findIndex((f) => f.name === target);
+    if (idx === -1) return result;
+    const f = fields[idx];
+    const lineStart = result.lastIndexOf("\n", f.nameStart - 1) + 1;
+    const onlyIndentBefore = /^[ \t]*$/.test(
+      result.slice(lineStart, f.nameStart),
+    );
+    const prevComma = idx > 0 ? fields[idx - 1].commaIndex : headerComma;
+
+    if (f.commaIndex !== -1) {
+      const afterComma = result.slice(f.commaIndex + 1);
+      const eol = /^[ \t]*\r?\n/.exec(afterComma);
+      if (onlyIndentBefore && eol) {
+        result =
+          result.slice(0, lineStart) +
+          result.slice(f.commaIndex + 1 + eol[0].length);
+      } else if (onlyIndentBefore && /^[ \t]*\}/.test(afterComma)) {
+        result = result.slice(0, lineStart) + result.slice(f.commaIndex + 1);
+      } else if (onlyIndentBefore) {
+        const spaces = /^[ \t]*/.exec(afterComma)![0].length;
+        result =
+          result.slice(0, f.nameStart) +
+          result.slice(f.commaIndex + 1 + spaces);
+      } else if (eol || /^[ \t]*\}/.test(afterComma)) {
+        let start = f.nameStart;
+        while (start > lineStart && /[ \t]/.test(result[start - 1])) start--;
+        result = result.slice(0, start) + result.slice(f.commaIndex + 1);
+      } else {
+        const spaces = /^[ \t]*/.exec(afterComma)![0].length;
+        result =
+          result.slice(0, f.nameStart) +
+          result.slice(f.commaIndex + 1 + spaces);
+      }
+    } else {
+      const afterVal = result.slice(f.valueEnd);
+      const eol = /^[ \t]*\r?\n/.exec(afterVal);
+      if (onlyIndentBefore && eol && prevComma !== -1) {
+        // Drop the field's line(s) and the preceding comma so the entry stays clean
+        result =
+          result.slice(0, prevComma) +
+          result.slice(prevComma + 1, lineStart) +
+          result.slice(f.valueEnd + eol[0].length);
+      } else if (prevComma !== -1) {
+        result = result.slice(0, prevComma) + result.slice(f.valueEnd);
+      } else {
+        result = result.slice(0, f.nameStart) + result.slice(f.valueEnd);
+      }
+    }
+  }
+}
+
+/** Appends fields to a BibTeX entry, skipping any already present. */
+function appendBibFields(
+  bib: string,
+  additions: ReadonlyArray<[string, string]>,
+): string {
+  const { fields } = parseBibFields(bib);
+  const present = new Set(fields.map((f) => f.name));
+  const missing = additions.filter(
+    ([name]) => !present.has(name.toLowerCase()),
+  );
+  if (!missing.length) return bib;
+  const close = bib.lastIndexOf("}");
+  if (close <= 0) return bib;
+  const before = bib.slice(0, close).trimEnd();
+  const comma = before.endsWith(",") ? "" : ",";
+  const lines = missing.map(([n, v]) => formatBibField(n, v)).join(",\n");
+  return `${before}${comma}\n${lines}\n${bib.slice(close)}`;
+}
+
+/**
+ * Fixes known flaws in S2's `citationStyles.bibtex`: conference papers come
+ * back as `@Article` with a `booktitle` (sometimes alongside `journal`),
+ * journal and arXiv `@Article` entries often carry a stray `booktitle`, arXiv
+ * ids are put in `volume = {abs/<id>}` instead of `eprint`/`archivePrefix`,
+ * and `doi` is left out even when S2 knows it. `paper` is the search result's
+ * metadata.
  */
 export function normalizeBibtexEntry(raw: string, paper?: S2Paper): string {
   let bib = raw.trim();
-  if (
-    /^@article\s*\{/i.test(bib) &&
-    /\bbooktitle\s*=/i.test(bib) &&
-    !/\bjournal\s*=/i.test(bib)
-  ) {
-    const types = paper?.publicationTypes ?? [];
-    if (types.includes("JournalArticle") && !types.includes("Conference"))
-      bib = bib.replace(/\bbooktitle(\s*=)/i, "journal$1");
-    else bib = bib.replace(/^@article\s*\{/i, "@inproceedings{");
+  if (/^@article\s*\{/i.test(bib)) {
+    const { fields } = parseBibFields(bib);
+    const booktitle = fields.find((f) => f.name === "booktitle");
+    const hasJournal = fields.some((f) => f.name === "journal");
+    if (booktitle) {
+      const types = paper?.publicationTypes ?? [];
+      if (!hasJournal) {
+        if (types.includes("JournalArticle") && !types.includes("Conference"))
+          bib =
+            bib.slice(0, booktitle.nameStart) +
+            "journal" +
+            bib.slice(booktitle.nameEnd);
+        else bib = bib.replace(/^@article\s*\{/i, "@inproceedings{");
+      } else if (
+        types.includes("Conference") &&
+        !types.includes("JournalArticle")
+      ) {
+        bib = bib.replace(/^@article\s*\{/i, "@inproceedings{");
+        bib = removeBibField(bib, "journal");
+      } else {
+        bib = removeBibField(bib, "booktitle");
+      }
+    }
   }
+  let arxivId: string | undefined;
+  const volume = parseBibFields(bib).fields.find((f) => f.name === "volume");
+  if (volume) {
+    const match = ARXIV_VOLUME.exec(unquoteBibValue(volume.rawValue));
+    if (match) {
+      bib = removeBibField(bib, "volume");
+      arxivId = paper?.externalIds?.ArXiv?.trim() || match[1].trim();
+    }
+  }
+  const additions: Array<[string, string]> = [];
   const doi = paper?.externalIds?.DOI;
-  const close = bib.lastIndexOf("}");
-  if (doi && close > 0 && !/\bdoi\s*=/i.test(bib)) {
-    const before = bib.slice(0, close).trimEnd();
-    const comma = before.endsWith(",") ? "" : ",";
-    bib = `${before}${comma}\n  doi = {${bibValue(doi)}}\n${bib.slice(close)}`;
-  }
+  if (doi) additions.push(["doi", doi]);
+  if (arxivId) additions.push(...arxivFields(arxivId));
+  if (additions.length) bib = appendBibFields(bib, additions);
   return bib;
 }
 
@@ -143,22 +424,24 @@ export function bibtexFromPaper(p: S2Paper): string {
     ["author", (p.authors ?? []).map((a) => a.name).join(" and ")],
     ["title", p.title],
   ];
+  const arxivVolume = p.journal?.volume
+    ? ARXIV_VOLUME.exec(p.journal.volume.trim())?.[1]?.trim()
+    : undefined;
   if (type === "inproceedings") fields.push(["booktitle", venue]);
   if (type === "article") {
     fields.push(
       ["journal", p.journal?.name || venue],
-      ["volume", p.journal?.volume],
+      ["volume", arxivVolume ? undefined : p.journal?.volume],
       ["pages", p.journal?.pages?.trim()],
     );
   }
   fields.push(["year", p.year], ["doi", p.externalIds?.DOI]);
-  if (p.externalIds?.ArXiv) {
-    fields.push(["eprint", p.externalIds.ArXiv], ["archivePrefix", "arXiv"]);
-  }
+  const arxivId = p.externalIds?.ArXiv?.trim() || arxivVolume;
+  if (arxivId) fields.push(...arxivFields(arxivId));
   if (type === "misc" && !p.externalIds?.DOI) fields.push(["url", p.url]);
   const body = fields
     .filter(([, v]) => v !== undefined && v !== null && v !== "")
-    .map(([name, v]) => `  ${name} = {${bibValue(String(v))}}`)
+    .map(([name, v]) => formatBibField(name, String(v)))
     .join(",\n");
   return `@${type}{${citeKey(p)}${body ? `,\n${body}` : ""}\n}`;
 }

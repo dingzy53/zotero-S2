@@ -12,8 +12,8 @@ export default zotero({
       },
     },
     {
-      // The stdio bridge and its tests run in Node, not in Zotero
-      files: ["addon/content/bridge/*.mjs", "bridge/*.mjs"],
+      // The stdio bridge and plain-Node tests run in Node, not in Zotero
+      files: ["addon/content/bridge/*.mjs", "bridge/*.mjs", "test/*.mjs"],
       languageOptions: {
         globals: {
           AbortSignal: "readonly",
