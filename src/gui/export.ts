@@ -89,6 +89,58 @@ function formatBibField(name: string, value: string): string {
   return `  ${name} = {${bibValue(value)}}`;
 }
 
+const ARXIV_VOLUME = /^abs\/(.+)$/;
+
+/** BibTeX fields identifying an arXiv preprint. */
+function arxivFields(arxivId: string): Array<[string, string]> {
+  return [
+    ["eprint", arxivId],
+    ["archivePrefix", "arXiv"],
+  ];
+}
+
+/** Strips one outer layer of balanced `{…}` or `"…"` from a BibTeX value. */
+function unquoteBibValue(raw: string): string {
+  const s = raw.trim();
+  if (s.length >= 2 && s[0] === "{" && s[s.length - 1] === "}") {
+    let depth = 0;
+    let closesAtEnd = true;
+    for (let i = 0; i < s.length - 1; i++) {
+      if (s[i] === "\\" && i + 1 < s.length - 1) {
+        i++;
+        continue;
+      }
+      if (s[i] === "{") depth++;
+      else if (s[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          closesAtEnd = false;
+          break;
+        }
+      }
+    }
+    if (closesAtEnd && depth === 1) return s.slice(1, -1).trim();
+  }
+  if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') {
+    let depth = 0;
+    let closesAtEnd = true;
+    for (let i = 1; i < s.length - 1; i++) {
+      if (s[i] === "\\" && i + 1 < s.length - 1) {
+        i++;
+        continue;
+      }
+      if (s[i] === "{") depth++;
+      else if (s[i] === "}" && depth > 0) depth--;
+      else if (s[i] === '"' && depth === 0) {
+        closesAtEnd = false;
+        break;
+      }
+    }
+    if (closesAtEnd && depth === 0) return s.slice(1, -1).trim();
+  }
+  return s;
+}
+
 interface BibField {
   name: string;
   nameStart: number;
@@ -293,8 +345,9 @@ function appendBibFields(
 /**
  * Fixes known flaws in S2's `citationStyles.bibtex`: conference papers come
  * back as `@Article` with a `booktitle` (sometimes alongside `journal`),
- * journal and arXiv `@Article` entries often carry a stray `booktitle`, and
- * `doi` is left out even when S2 knows it. `paper` is the search result's
+ * journal and arXiv `@Article` entries often carry a stray `booktitle`, arXiv
+ * ids are put in `volume = {abs/<id>}` instead of `eprint`/`archivePrefix`,
+ * and `doi` is left out even when S2 knows it. `paper` is the search result's
  * metadata.
  */
 export function normalizeBibtexEntry(raw: string, paper?: S2Paper): string {
@@ -323,8 +376,20 @@ export function normalizeBibtexEntry(raw: string, paper?: S2Paper): string {
       }
     }
   }
+  let arxivId: string | undefined;
+  const volume = parseBibFields(bib).fields.find((f) => f.name === "volume");
+  if (volume) {
+    const match = ARXIV_VOLUME.exec(unquoteBibValue(volume.rawValue));
+    if (match) {
+      bib = removeBibField(bib, "volume");
+      arxivId = paper?.externalIds?.ArXiv?.trim() || match[1].trim();
+    }
+  }
+  const additions: Array<[string, string]> = [];
   const doi = paper?.externalIds?.DOI;
-  if (doi) bib = appendBibFields(bib, [["doi", doi]]);
+  if (doi) additions.push(["doi", doi]);
+  if (arxivId) additions.push(...arxivFields(arxivId));
+  if (additions.length) bib = appendBibFields(bib, additions);
   return bib;
 }
 
@@ -359,18 +424,20 @@ export function bibtexFromPaper(p: S2Paper): string {
     ["author", (p.authors ?? []).map((a) => a.name).join(" and ")],
     ["title", p.title],
   ];
+  const arxivVolume = p.journal?.volume
+    ? ARXIV_VOLUME.exec(p.journal.volume.trim())?.[1]?.trim()
+    : undefined;
   if (type === "inproceedings") fields.push(["booktitle", venue]);
   if (type === "article") {
     fields.push(
       ["journal", p.journal?.name || venue],
-      ["volume", p.journal?.volume],
+      ["volume", arxivVolume ? undefined : p.journal?.volume],
       ["pages", p.journal?.pages?.trim()],
     );
   }
   fields.push(["year", p.year], ["doi", p.externalIds?.DOI]);
-  if (p.externalIds?.ArXiv) {
-    fields.push(["eprint", p.externalIds.ArXiv], ["archivePrefix", "arXiv"]);
-  }
+  const arxivId = p.externalIds?.ArXiv?.trim() || arxivVolume;
+  if (arxivId) fields.push(...arxivFields(arxivId));
   if (type === "misc" && !p.externalIds?.DOI) fields.push(["url", p.url]);
   const body = fields
     .filter(([, v]) => v !== undefined && v !== null && v !== "")
