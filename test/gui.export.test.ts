@@ -3,6 +3,7 @@ import {
   bibtexFromPaper,
   joinBibtex,
   normalizeBibtexEntry,
+  removeBibField,
   toCSV,
   toRIS,
 } from "../src/gui/export";
@@ -84,15 +85,134 @@ describe("gui export", function () {
     assert.match(journal, /^@Article\{/);
     assert.include(journal, " journal = {Neural Information Processing");
     assert.notInclude(journal, "booktitle");
-    // @Article with a journal is left alone, whatever the paper type
-    const arxiv = "@article{x,\n journal = {ArXiv},\n booktitle = {B}\n}";
-    assert.match(
-      normalizeBibtexEntry(arxiv, {
-        ...ATTENTION,
-        publicationTypes: ["Conference"],
-      }),
-      /^@article\{/,
+  });
+
+  it("resolves @Article entries that have both journal and booktitle", function () {
+    // Journal article with both fields: drop booktitle, keep journal
+    const journalRaw =
+      "@Article{LeCun2015DeepL,\n" +
+      " author = {Yann LeCun and Yoshua Bengio and Geoffrey E. Hinton},\n" +
+      " booktitle = {Nature},\n" +
+      " journal = {Nature},\n" +
+      " pages = {436-444},\n" +
+      " title = {Deep Learning},\n" +
+      " volume = {521},\n" +
+      " year = {2015}\n}\n";
+    const journalBib = normalizeBibtexEntry(journalRaw, DEEP_LEARNING);
+    assert.match(journalBib, /^@Article\{LeCun2015DeepL,\n/);
+    assert.include(journalBib, " journal = {Nature},");
+    assert.notInclude(journalBib, "booktitle");
+    assert.include(journalBib, " doi = {10.1038/nature14539}");
+
+    // Conference-only paper with both fields: rewrite to @inproceedings, drop journal
+    const confRaw =
+      "@article{Vaswani2017AttentionIA,\n" +
+      " author = {Ashish Vaswani and Noam M. Shazeer},\n" +
+      " booktitle = {Neural Information Processing Systems},\n" +
+      " journal = {ArXiv},\n" +
+      " title = {Attention is All you Need},\n" +
+      " year = {2017}\n}\n";
+    const confBib = normalizeBibtexEntry(confRaw, {
+      ...ATTENTION,
+      publicationTypes: ["Conference"],
+    });
+    assert.match(confBib, /^@inproceedings\{Vaswani2017AttentionIA,\n/);
+    assert.include(
+      confBib,
+      " booktitle = {Neural Information Processing Systems},",
     );
+    assert.notInclude(confBib, "journal");
+
+    // Both JournalArticle and Conference, or no metadata: keep @Article, drop booktitle
+    const mixedBib = normalizeBibtexEntry(confRaw, ATTENTION);
+    assert.match(mixedBib, /^@article\{Vaswani2017AttentionIA,\n/);
+    assert.include(mixedBib, " journal = {ArXiv},");
+    assert.notInclude(mixedBib, "booktitle");
+
+    const noMetaBib = normalizeBibtexEntry(confRaw);
+    assert.match(noMetaBib, /^@article\{Vaswani2017AttentionIA,\n/);
+    assert.include(noMetaBib, " journal = {ArXiv},");
+    assert.notInclude(noMetaBib, "booktitle");
+
+    // Entry with neither journal nor booktitle is unchanged
+    const neither =
+      "@Article{Bare2020,\n" +
+      " author = {Jane Doe},\n" +
+      " title = {Minimal Entry},\n" +
+      " year = {2020}\n}";
+    assert.equal(normalizeBibtexEntry(neither), neither);
+  });
+
+  it("removes BibTeX fields across nested braces, quotes and multiple lines", function () {
+    // Nested braces and multi-line value
+    const multiBraced =
+      "@Article{X,\n" +
+      "  author = {Alice},\n" +
+      "  booktitle = {Proceedings of the\n" +
+      "    {IEEE/CVF} Conference on {Computer Vision}},\n" +
+      "  journal = {IEEE TPAMI},\n" +
+      "  year = {2025}\n}";
+    assert.equal(
+      removeBibField(multiBraced, "booktitle"),
+      "@Article{X,\n" +
+        "  author = {Alice},\n" +
+        "  journal = {IEEE TPAMI},\n" +
+        "  year = {2025}\n}",
+    );
+
+    // Multi-line quoted value with escaped quotes and nested braces
+    const multiQuoted =
+      "@Article{X,\n" +
+      '  BookTitle = "Proceedings of \\"Foo\\",\n' +
+      '    {Bar, "Baz"} Workshop",\n' +
+      "  journal = {Nature},\n" +
+      "  year = {2025}\n}";
+    assert.equal(
+      removeBibField(multiQuoted, "booktitle"),
+      "@Article{X,\n  journal = {Nature},\n  year = {2025}\n}",
+    );
+
+    // Last field without trailing comma drops the previous field's comma cleanly
+    const lastField =
+      "@Article{X,\n" +
+      "  journal = {ArXiv},\n" +
+      "  booktitle = {arXiv.org}\n}";
+    assert.equal(
+      removeBibField(lastField, "booktitle"),
+      "@Article{X,\n  journal = {ArXiv}\n}",
+    );
+
+    // Inline fields on one line
+    assert.equal(
+      removeBibField(
+        "@Article{X, booktitle = {arXiv.org}, journal = {ArXiv}}",
+        "booktitle",
+      ),
+      "@Article{X, journal = {ArXiv}}",
+    );
+    assert.equal(
+      removeBibField(
+        "@Article{X, journal = {ArXiv}, booktitle = {arXiv.org}}",
+        "booktitle",
+      ),
+      "@Article{X, journal = {ArXiv}}",
+    );
+
+    // Text resembling a field inside another field's value is untouched
+    const inTitle =
+      "@Article{X,\n" +
+      "  title = {Why booktitle = {foo} breaks BibTeX},\n" +
+      "  booktitle = {arXiv.org},\n" +
+      "  journal = {ArXiv}\n}";
+    assert.equal(
+      removeBibField(inTitle, "booktitle"),
+      "@Article{X,\n" +
+        "  title = {Why booktitle = {foo} breaks BibTeX},\n" +
+        "  journal = {ArXiv}\n}",
+    );
+
+    // Missing field returns the entry unchanged
+    assert.equal(removeBibField(lastField, "volume"), lastField);
   });
 
   it("adds a missing DOI to S2's BibTeX once", function () {
